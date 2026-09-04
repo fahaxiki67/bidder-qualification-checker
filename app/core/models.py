@@ -82,6 +82,7 @@ class RuleResult:
 
     rule_id: str
     title: str
-    status: str                     # Status 值
+    status: str                     # Status 值；未启用条款=NOT_APPLICABLE
     reasons: list[str] = field(default_factory=list)
     company: str | None = None
+    scope: str | None = None        # term=资格条款 / background=通用背景风险 / meta=主体兜底

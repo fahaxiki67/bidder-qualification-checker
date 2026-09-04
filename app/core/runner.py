@@ -20,7 +20,7 @@ from .db import connect
 from .models import Company, Finding, Project
 from .registry import SourceRegistry
 from .router import plan_with_exclusions
-from .rules import RuleEngine
+from .rules import RuleEngine, engine_for_terms, normalize_terms
 from .status import (
     Status,
     combine_data,
@@ -50,7 +50,7 @@ def _load_check_target(conn: sqlite3.Connection, pc_id: int):
     if pc is None:
         raise ValueError(f"project_companies id={pc_id} 不存在")
     proj = conn.execute(
-        "SELECT id, name, province, industry, owner_group, base_date, years_back "
+        "SELECT id, name, province, industry, owner_group, base_date, years_back, terms "
         "FROM projects WHERE id = ?",
         (pc["project_id"],),
     ).fetchone()
@@ -79,10 +79,13 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
             (run_id, proj["id"], comp["id"], "real_sources" if real_sources else scenario),
         )
         conn.commit()
+        # DB terms：NULL=未指定（全部条款启用，兼容旧项目）；串=本项目勾选
+        enabled_terms = normalize_terms(proj["terms"])
         project = Project(
             name=proj["name"], province=proj["province"], industry=proj["industry"],
             owner_group=proj["owner_group"],
             base_date=date.fromisoformat(proj["base_date"]), years_back=proj["years_back"],
+            terms=tuple(sorted(enabled_terms)) if enabled_terms else (),
         )
         company = Company(name=comp["name"], uscc=comp["uscc"],
                           registered_province=comp["registered_province"])
@@ -123,7 +126,7 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                     source_status[primary.id] = Status.ERROR
                     notes[primary.id] = "演示：数据源查询失败"
 
-        engine = RuleEngine()
+        engine = engine_for_terms(enabled_terms)  # Project.terms 真正控制规则（P0.5 §八）
         all_findings = [f for lst in per_source.values() for f in lst]
         results = engine.run_all(all_findings, project, company)
 
@@ -163,13 +166,16 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
 
         for r in results:
             conn.execute(
-                "INSERT INTO rule_results (project_id, company_id, rule_id, status, reasons_json, run_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO rule_results (project_id, company_id, rule_id, status, reasons_json, run_id, scope) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (proj["id"], comp["id"], r.rule_id, r.status,
-                 json.dumps(r.reasons, ensure_ascii=False), run_id),
+                 json.dumps(r.reasons, ensure_ascii=False), run_id, r.scope),
             )
-        # 业务判断与数据获取分层合并：数据异常/人工复核绝不被 WARNING/PASS 掩盖（P0.5 §三）
-        decision = combine_decision(r.status for r in results)
+        # 正式资格判断：仅启用条款（term/meta）；background=通用背景风险不否决，
+        # NOT_APPLICABLE=未启用条款不入统计（P0.5 §八）
+        decision = combine_decision(
+            r.status for r in results
+            if r.status != "NOT_APPLICABLE" and r.scope != "background")
         data = combine_data(source_status.values())
         manual_required = needs_manual((r.status for r in results), source_status.values())
         overall = overall_status(decision, data).value

@@ -115,8 +115,15 @@ def needs_manual(decision_statuses, data_statuses) -> bool:
 
     该标记独立于展示层状态保存，确保 FAIL+MANUAL 等组合下
     "仍需人工复核"的信息不因 FAIL 抢占展示位而丢失。
+    非判定标记（如未启用条款的 NOT_APPLICABLE）自动跳过。
     """
-    return any(Status(s) == Status.MANUAL for s in list(decision_statuses) + list(data_statuses))
+    for s in list(decision_statuses) + list(data_statuses):
+        try:
+            if Status(s) == Status.MANUAL:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def combine(statuses) -> Status:

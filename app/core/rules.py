@@ -1,19 +1,77 @@
-"""RuleEngine：只回答“这些事实是否触发本项目资格否决条款”（任务书 §4/§5/§6）。
+"""RuleEngine：只回答"这些事实是否触发本项目资格否决条款"（任务书 §4/§5/§6）。
 
 硬规则：
-- FAIL 必须有 A/B 级证据支持；仅 C/D 线索 → UNKNOWN（任务书 §8）；
+- FAIL 必须有 A/B 级证据支持；仅 C/D 级线索 → UNKNOWN（任务书 §8）；
 - 历史处罚/历史禁入已解除 → WARNING，不按当前状态否决；
-- “其他丧失履约能力”不得由机器扩大解释 → 一律 MANUAL 转人工；
+- "其他丧失履约能力"不得由机器扩大解释 → 一律 MANUAL 转人工；
 - 普通罚款不自动等于 FAIL。
+
+P0.5 §八：规则定义来源 app/config/rules.yaml（scope=term/background + clause）；
+Project.terms 真正控制哪些资格条款参与正式资格判断——未被本项目启用的条款
+不得形成否决（记 NOT_APPLICABLE 留痕）；background 规则始终评估但只作
+通用背景风险，绝不单独否决项目资格。
 """
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass, replace
 from datetime import date
+from pathlib import Path
+
+import yaml
 
 from .evidence import can_support_fail
 from .matching import UNCONFIRMED
 from .models import Company, Finding, Project, RuleResult
 from .status import Status, combine_decision
+
+#: 规则定义文件（随包分发；PROJECT_ROOT/app/config/rules.yaml）
+RULES_YAML = Path(__file__).resolve().parents[1] / "config" / "rules.yaml"
+
+_TERM_SPLIT = re.compile(r"[,，、;；/\s]+")
+
+
+@dataclass
+class RuleSpec:
+    """rules.yaml 的一行：规则 id ↔ 结构化条款号 ↔ scope。"""
+
+    id: str
+    title: str
+    clause: str
+    scope: str
+    fail_requires: str = ""
+
+
+def load_rule_specs(path: str | Path = RULES_YAML) -> dict[str, RuleSpec]:
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    specs: dict[str, RuleSpec] = {}
+    for raw in data.get("rules") or []:
+        spec = RuleSpec(
+            id=str(raw["id"]), title=str(raw.get("title", "")),
+            clause=str(raw.get("clause", "")),
+            scope=str(raw.get("scope", "term")),
+            fail_requires=str(raw.get("fail_requires", "")),
+        )
+        specs[spec.id] = spec
+    return specs
+
+
+def normalize_terms(terms) -> set[str] | None:
+    """条款勾选归一化。None=未指定（全部条款启用，兼容旧调用）；
+    空串/空集合=明确不启用任何资格条款（仅 background 规则评估）。"""
+    if terms is None:
+        return None
+    if isinstance(terms, str):
+        return {x for x in _TERM_SPLIT.split(terms) if x}
+    return {str(x) for x in terms if x}
+
+
+RULES_BY_ID: dict[str, object] = {}
+
+
+def _register_default_rules() -> None:
+    for r in DEFAULT_RULES:
+        RULES_BY_ID[r.id] = r
 
 
 def effective_on(start: date | None, end: date | None, base: date) -> bool:
@@ -70,7 +128,7 @@ class BidRestrictionRule:
 
 
 class BusinessStatusRule:
-    """条款2：当前处于责令停产停业/证照暂扣吊销状态。关键词是“当前处于”。"""
+    """条款2：当前处于责令停产停业/证照暂扣吊销状态。关键词是"当前处于"。"""
 
     id = "rule_business_status"
     title = "当前处于停产停业或证照吊销/暂扣状态"
@@ -104,7 +162,7 @@ class BusinessStatusRule:
 
 
 class BankruptcyRule:
-    """条款3：当前进入清算程序/被宣告破产。“其他丧失履约能力”一律转人工。"""
+    """条款3：当前进入清算程序/被宣告破产。"其他丧失履约能力"一律转人工。"""
 
     id = "rule_bankruptcy"
     title = "进入清算程序或被宣告破产"
@@ -125,7 +183,7 @@ class BankruptcyRule:
             elif f.kind == "loss_of_capacity_other":
                 hit = True
                 reasons.append(
-                    f"[{f.source_id}] “其他丧失履约能力”不得由机器扩大解释，转人工判断：{f.description}"
+                    f"[{f.source_id}] 「其他丧失履约能力」不得由机器扩大解释，转人工判断：{f.description}"
                 )
                 statuses.append(Status.MANUAL)
         if not hit:
@@ -169,7 +227,7 @@ class OwnerBanRule:
 class LicenseValidityRule:
     """任务书 §6：证照有效期特别规则。
 
-    投标文件扫描件过期只允许说“表面已超过载明有效期”（WARNING）；
+    投标文件扫描件过期只允许说"表面已超过载明有效期"（WARNING）；
     是否无证以主管部门当前状态为准：已延期不得判无证；过期/注销/吊销/暂扣才进入否决评估。
     """
 
@@ -238,24 +296,70 @@ def subject_confirmation_result(unconfirmed: list[Finding]) -> RuleResult:
         status=Status.MANUAL.value,
         reasons=reasons,
         company=None,
+        scope="meta",
     )
 
 
+def engine_for_terms(terms, specs: dict[str, RuleSpec] | None = None) -> "RuleEngine":
+    """按本项目启用的条款构造 RuleEngine（P0.5 §八）。
+
+    terms=None → 未指定，全部规则启用（兼容旧调用/mock 演示）；
+    terms 为集合/串 → 仅启用 scope=term 且 clause 命中的规则；background 恒评估。
+    """
+    specs = specs if specs is not None else load_rule_specs()
+    enabled = normalize_terms(terms)
+    rules = []
+    for spec in specs.values():
+        rule = RULES_BY_ID.get(spec.id)
+        if rule is None:
+            continue
+        if spec.scope == "term" and enabled is not None and spec.clause not in enabled:
+            continue
+        rules.append(rule)
+    return RuleEngine(rules=rules, terms=enabled, specs=specs)
+
+
 class RuleEngine:
-    def __init__(self, rules=DEFAULT_RULES):
+    def __init__(self, rules=DEFAULT_RULES, terms=None, specs=None):
         self.rules = list(rules)
+        self.terms = normalize_terms(terms)          # None=未指定→全启用（兼容旧调用）
+        self.specs = specs if specs is not None else load_rule_specs()
 
     def run_all(self, findings, project: Project, company: Company | None = None) -> list[RuleResult]:
         # 主体一致性强制点（P0.5 §六）：UNCONFIRMED 记录绝不进业务条款（防止
         # 同名/缺码记录被错并成 FAIL），统一转人工兜底条款
         confirmed = [f for f in findings if f.attrs.get("match_result") != UNCONFIRMED]
         unconfirmed = [f for f in findings if f.attrs.get("match_result") == UNCONFIRMED]
-        results = [rule.evaluate(confirmed, project, company) for rule in self.rules]
+        results: list[RuleResult] = []
+        for rule in self.rules:
+            out = rule.evaluate(confirmed, project, company)
+            spec = self.specs.get(rule.id)
+            results.append(replace(out, scope=spec.scope if spec else None))
+        # 本项目未启用的资格条款：显式留痕 NOT_APPLICABLE（不参与正式资格判断）
+        if self.terms is not None:
+            enabled_ids = {r.id for r in self.rules}
+            for spec in self.specs.values():
+                if spec.scope == "term" and spec.id not in enabled_ids and spec.id in RULES_BY_ID:
+                    results.append(RuleResult(
+                        rule_id=spec.id, title=spec.title, status="NOT_APPLICABLE",
+                        reasons=[f"本项目未启用该资格条款（{spec.clause}），不参与正式资格判断"],
+                        scope=spec.scope,
+                    ))
         if unconfirmed:
             results.append(subject_confirmation_result(unconfirmed))
         return results
 
     @staticmethod
     def overall(results) -> str:
-        """全部条款的最严重结论。任一 ERROR/TIMEOUT/BLOCKED/MANUAL/UNKNOWN 都不会被吞成 PASS。"""
-        return combine_decision([r.status for r in results]).value
+        """正式资格判断：只统计启用的 term/meta 条款。
+
+        background=通用背景风险不参与否决；NOT_APPLICABLE=未启用条款不入统计；
+        任一 ERROR/TIMEOUT/BLOCKED/MANUAL/UNKNOWN 都不会被吞成 PASS。
+        """
+        return combine_decision(
+            r.status for r in results
+            if r.status != "NOT_APPLICABLE" and getattr(r, "scope", None) != "background"
+        ).value
+
+
+_register_default_rules()

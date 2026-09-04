@@ -140,7 +140,7 @@ EXPECTED_TABLES = (
 #: 旧行 run_id 为 NULL = 迁移前的历史数据，原样保留可追溯，绝不删除旧库。
 _MIGRATIONS: dict[str, tuple[tuple[str, str], ...]] = {
     "source_queries": (("run_id", "TEXT"),),
-    "rule_results": (("run_id", "TEXT"),),
+    "rule_results": (("run_id", "TEXT"), ("scope", "TEXT")),
     "manual_reviews": (("run_id", "TEXT"),),
     "project_companies": (("run_id", "TEXT"),),
 }

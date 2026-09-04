@@ -59,6 +59,7 @@ def create_and_run(
     uscc: str = Form(""),
     registered_province: str = Form(""),
     scenario: str = Form("clean"),
+    terms: list[str] = Form([]),   # 本项目启用的资格条款（结构化勾选，P0.5 §八）
 ):
     if not base_date:
         base_date = date.today().isoformat()
@@ -73,7 +74,8 @@ def create_and_run(
             "INSERT INTO projects (name, province, industry, owner_group, base_date, years_back, terms) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (project_name, province or None, industry or None, owner_group or None,
-             base.isoformat(), years_back, "条款1,条款2,条款3,条款4,§6"),
+             base.isoformat(), years_back,
+             ",".join(t for t in terms if t) or None),
         )
         project_id = cur.lastrowid
         company_id = None
@@ -160,7 +162,10 @@ def result(request: Request, pc_id: int):
     import json
     for r in data["rules"]:
         r["badge"] = BADGE.get(r["status"], "badge-muted")
-        r["label"] = report_label(Status(r["status"]))
+        if r["status"] == "NOT_APPLICABLE":
+            r["label"] = "不适用（本项目未启用该条款）"
+        else:
+            r["label"] = report_label(Status(r["status"]))
     run = data["run"]
     overall = run["overall_status"] if run else None
     data_status = run["data_status"] if run else None
