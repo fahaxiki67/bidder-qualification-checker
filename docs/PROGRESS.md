@@ -4,4 +4,4 @@
 
 | 日期 | 阶段 | 完成 | 遗留 / 下一步 |
 |------|------|------|----------------|
-| 2026-09-04 (日间) | 初始化 | 仓库骨架：README/WORKPLAN/LICENSE/.gitignore/CI 占位/Issue 模板；任务书备份至 local/taskdoc/；已推 GitHub | 今晚 23:00 首夜：P1 架构骨架 |
+| 2026-09-04 (日间) | 初始化 | 仓库骨架：README/WORKPLAN/LICENSE/.gitignore/CI 占位/Issue 模板；任务书备份至 local/taskdoc/；已推 GitHub；执行模型定为闲时接力（至 9/20，每日 08:30 收口） | 首条闲时任务待当晚取号额度恢复（00:00 重置）后创建：P1 架构骨架 |
