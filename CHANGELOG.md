@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.0] - 2026-09-05（P3R 准备：复核作业清单 + 单源联调工具）
+
+### Added
+- docs/P3R_CHECKLIST.md：逐源人工复核作业清单（复核入口/当前模式/解析契约假设/
+  已实测风控提示/回填示例/完成判据）
+- CLI `bqc check-source <source_id> --name 企业 [--uscc 码]`：单源联调诊断，
+  受 nightly_mock_only 门控（白天人工复核显式 --daytime-override）；
+  输出状态/注记/发现/主体匹配，失败状态不美化
+- docs/SUMMARY.md：项目整体总结（十阶段/红线兑现/如实清单/下一步），供 9/20 收口
+
+### 测试
+- 228 → 233 项全绿（tests/test_diagnostics.py：门控/未知源/MANUAL 输出/注入查询/CLI）
+
 ## [0.11.0] - 2026-09-05（P10 收尾：打 tag 自动 Release，双平台产物）
 
 ### Added

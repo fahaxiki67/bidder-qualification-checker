@@ -41,7 +41,7 @@
   gsxt 521（WAF）——非浏览器访问全部被拒，与上表"当前自动化能力=无真实查询"一致。
 - 主体一致性关卡（P0.5 §六）已进真实链路：同名不同码记录被剔除、缺码记录转人工。
 
-## 待办：P3R 真实联调（需白天人工配合）
+## 待办：P3R 真实联调（需白天人工配合；逐源作业清单见 docs/P3R_CHECKLIST.md，单源实测工具 bqc check-source）
 
 1. 逐源人工复核官方门户查询入口 → 回填 `query_url`/`last_verified`。
 2. 按真实响应格式修正各解析器，用真实样本回放验证。
@@ -54,7 +54,7 @@
 - [ ] Windows 安装包（P8）
 - [x] macOS 构建包（P9：CI arm64 zip=bqc+.command 启动脚本；本机实测+CI 产物复验）
 - [x] README
-- [x] 测试结果（每轮 PROGRESS.md 记录；当前 228 项全绿，CI 六 job+release 测试门）
+- [x] 测试结果（每轮 PROGRESS.md 记录；当前 233 项全绿，CI 六 job+release 测试门）
 - [ ] 已支持数据源清单（真实联调后才有"已支持"）
 - [x] 未支持数据源清单（即上表）
 - [x] 地区插件开发说明（docs/PLUGINS.md）

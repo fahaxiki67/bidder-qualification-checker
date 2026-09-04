@@ -50,6 +50,14 @@ def main(argv=None) -> int:
     p_import.add_argument("file", help="名单 JSON 文件（契约见 app/sources/owners/powerchina.py）")
     p_import.add_argument("--db", default=str(DEFAULT_DB), help="数据库路径")
     p_import.add_argument("--source", default="powerchina_ban", help="数据源 id")
+    p_check = sub.add_parser(
+        "check-source", help="单源联调诊断（白天人工复核用，受夜间门控）")
+    p_check.add_argument("source_id", help="数据源 id（见 docs/P3R_CHECKLIST.md）")
+    p_check.add_argument("--name", required=True, help="测试企业名称")
+    p_check.add_argument("--uscc", default=None, help="测试企业统一社会信用代码")
+    p_check.add_argument("--timeout", type=float, default=15.0)
+    p_check.add_argument("--daytime-override", action="store_true",
+                         help="显式确认：白天人工复核，越过夜间门控")
     p_report = sub.add_parser("report", help="导出核查报告（Excel 明细 11 sheet / PDF）")
     p_report.add_argument("pc_id", type=int, help="project_companies 记录 id")
     p_report.add_argument("--db", default=str(DEFAULT_DB), help="数据库路径")
@@ -81,6 +89,18 @@ def main(argv=None) -> int:
         print(f"名单证据已入库: evidence_id={eid} sha256={digest}")
         print(f"存档路径: {fpath}")
         print("后续核查（bqc serve / run_check）将自动经主体一致性检查离线评判该名单")
+        return 0
+
+    if args.command == "check-source":
+        from .diagnostics import check_source, format_outcome
+        try:
+            src, out = check_source(
+                args.source_id, args.name, uscc=args.uscc, timeout=args.timeout,
+                allow_daytime=args.daytime_override)
+        except (ValueError, RuntimeError) as e:
+            print(f"拒绝执行：{e}")
+            return 2
+        print(format_outcome(src, out))
         return 0
 
     if args.command == "report":
