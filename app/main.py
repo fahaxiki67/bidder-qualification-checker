@@ -60,6 +60,8 @@ def main(argv=None) -> int:
                          help="显式确认：白天人工复核，越过夜间门控")
     p_check.add_argument("--save-evidence", metavar="DB",
                          help="把本次真实响应原文存为哈希证据到指定数据库（联调留证）")
+    p_verify = sub.add_parser("verify-evidence", help="复核证据完整性（SHA-256 比对）")
+    p_verify.add_argument("--db", default=str(DEFAULT_DB), help="数据库路径")
     p_report = sub.add_parser("report", help="导出核查报告（Excel 明细 11 sheet / PDF）")
     p_report.add_argument("pc_id", type=int, help="project_companies 记录 id")
     p_report.add_argument("--db", default=str(DEFAULT_DB), help="数据库路径")
@@ -76,6 +78,9 @@ def main(argv=None) -> int:
         from .core.evidence import save_evidence, verify_evidence
 
         src = Path(args.file)
+        if not src.is_file():
+            print(f"名单文件不存在：{src}")
+            return 2
         text = src.read_text(encoding="utf-8")
         init_db(args.db)
         eid, fpath, digest = save_evidence(
@@ -118,18 +123,35 @@ def main(argv=None) -> int:
         print(format_outcome(src, out))
         return 0
 
+    if args.command == "verify-evidence":
+        from .core.evidence import verify_evidence
+
+        init_db(args.db)
+        ok, broken = verify_evidence(args.db)
+        print(f"证据完整性：{ok} 份正常，{len(broken)} 份异常")
+        for eid, problem in broken:
+            print(f"  [损坏] evidence_id={eid}: {problem}")
+        return 1 if broken else 0
+
     if args.command == "report":
         if not args.excel and not args.pdf:
             print("至少指定 --excel 或 --pdf 输出路径")
             return 2
+        from .core.db import init_db as _init_db
         from .reports.excel import export_excel
         from .reports.pdf import export_pdf
-        if args.excel:
-            out = export_excel(args.db, args.pc_id, args.excel)
-            print(f"Excel 明细已导出: {out}")
-        if args.pdf:
-            out = export_pdf(args.db, args.pc_id, args.pdf)
-            print(f"PDF 报告已导出: {out}")
+
+        _init_db(args.db)
+        try:
+            if args.excel:
+                out = export_excel(args.db, args.pc_id, args.excel)
+                print(f"Excel 明细已导出: {out}")
+            if args.pdf:
+                out = export_pdf(args.db, args.pc_id, args.pdf)
+                print(f"PDF 报告已导出: {out}")
+        except ValueError as e:
+            print(f"无法生成报告：{e}")
+            return 2
         return 0
 
     if args.command == "serve":

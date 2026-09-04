@@ -115,3 +115,35 @@ def test_cli_check_source_save_evidence(tmp_path, monkeypatch):
         conn.close()
     assert row[0] == "creditchina" and row[1] == "p3r_probe"
     assert Path(row[3]).is_file()
+
+
+def test_cli_verify_evidence_and_friendly_errors(tmp_path, monkeypatch):
+    """verify-evidence 子命令 + report/import-bans 的友好报错（退出码而非堆栈）。"""
+    from app.main import main as cli
+
+    # 证据完整 → 0；篡改 → 1
+    db = tmp_path / "ev.sqlite3"
+    from app.core.evidence import save_evidence
+    from app.core.db import init_db
+    init_db(db)
+    save_evidence(db, source_id="s", url=None, raw_text="原文", kind="k")
+    assert cli(["verify-evidence", "--db", str(db)]) == 0
+
+    db2 = tmp_path / "ev2.sqlite3"
+    init_db(db2)
+    from app.core.evidence import evidence_dir_for
+    eid, fpath, _ = save_evidence(db2, source_id="s", url=None, raw_text="原文", kind="k")
+    fpath.write_text("篡改", encoding="utf-8")
+    assert cli(["verify-evidence", "--db", str(db2)]) == 1
+
+    # report：pc 不存在 → 退出码 2 无堆栈
+    import io
+    from contextlib import redirect_stderr
+    err = io.StringIO()
+    with redirect_stderr(err):
+        rc = cli(["report", "99999", "--db", str(tmp_path / "none.sqlite3"),
+                  "--excel", str(tmp_path / "x.xlsx")])
+    assert rc == 2
+
+    # import-bans：文件不存在 → 退出码 2
+    assert cli(["import-bans", str(tmp_path / "不存在.json"), "--db", str(db)]) == 2
