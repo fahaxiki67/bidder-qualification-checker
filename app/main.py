@@ -7,8 +7,9 @@ from pathlib import Path
 
 from . import __version__
 from .core.db import init_db
+from .paths import default_db_path
 
-DEFAULT_DB = Path("data/bqc.sqlite3")
+DEFAULT_DB = default_db_path()
 
 
 def _force_utf8_stdio() -> None:

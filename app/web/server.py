@@ -16,12 +16,13 @@ from starlette.requests import Request
 from .. import __version__
 from ..core.db import connect, init_db
 from ..core.evidence import evidence_dir_for
+from ..paths import default_db_path
 from ..core.runner import run_check
 from ..core.status import Status, report_label
 
-# 数据库默认落在当前工作目录 data/（与 CLI init-db 默认一致），
-# 安装版不再往 site-packages 写数据。
-DB_PATH = Path(os.environ.get("BQC_DB") or Path("data/bqc.sqlite3"))
+# 数据库默认路径：源码/CLI=当前工作目录 data/；PyInstaller 打包=用户数据目录
+# （Windows %LOCALAPPDATA%\bqc\data\，任务书 P8）。BQC_DB 环境变量优先级最高。
+DB_PATH = Path(os.environ.get("BQC_DB") or default_db_path())
 init_db(DB_PATH)
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))

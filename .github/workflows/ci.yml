@@ -69,3 +69,41 @@ jobs:
           cd "$RUNNER_TEMP"
           "$GITHUB_WORKSPACE/.venv-sdist/bin/python" -m app.main --help
           "$GITHUB_WORKSPACE/.venv-sdist/bin/python" "$GITHUB_WORKSPACE/scripts/smoke_installed.py"
+
+  package-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pyinstaller
+      - name: Build exe (PyInstaller onefile)
+        run: pyinstaller bqc.spec --noconfirm
+      - name: Smoke frozen exe (含 %LOCALAPPDATA% 数据目录验证)
+        shell: pwsh
+        run: |
+          dist\bqc.exe --version
+          dist\bqc.exe --help *> $null
+          New-Item -ItemType Directory -Force -Path smoke-cwd | Out-Null
+          Push-Location smoke-cwd
+          ..\dist\bqc.exe init-db
+          Pop-Location
+          $db = Join-Path $env:LOCALAPPDATA "bqc\data\bqc.sqlite3"
+          if (-not (Test-Path $db)) { Write-Error "frozen 数据目录未落在 LOCALAPPDATA: $db"; exit 1 }
+          Write-Host "frozen init-db OK: $db"
+      - name: Package zip (exe + 启动脚本)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+          Copy-Item dist\bqc.exe stage\
+          Copy-Item scripts\start_server.bat stage\
+          Compress-Archive -Path stage\* -DestinationPath bqc-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bqc-windows-x64
+          path: bqc-windows-x64.zip
+          retention-days: 14
