@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.17.0] - 2026-09-05（联调工具链闭环：实测响应一键留证）
+
+### Added
+- `bqc check-source --save-evidence <db>`：单源联调实测的真实响应原文一键存为
+  SHA-256 哈希证据（kind=p3r_probe），与 P6 证据系统/回放链打通——
+  侦察→回填→实测留证→离线评判 的 P3R 工具链闭环
+- 测试 239 → 240 项全绿
+
+### Fixed
+- 修复 check-source 分支局部 import 遮蔽模块级 init_db 的 UnboundLocalError
+  （经典 Python 作用域坑，CLI 测试当场暴露即修）
+
 ## [0.16.0] - 2026-09-05（P3R 工具：门户自动侦察脚本）
 
 ### Added

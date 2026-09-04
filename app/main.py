@@ -58,6 +58,8 @@ def main(argv=None) -> int:
     p_check.add_argument("--timeout", type=float, default=15.0)
     p_check.add_argument("--daytime-override", action="store_true",
                          help="显式确认：白天人工复核，越过夜间门控")
+    p_check.add_argument("--save-evidence", metavar="DB",
+                         help="把本次真实响应原文存为哈希证据到指定数据库（联调留证）")
     p_report = sub.add_parser("report", help="导出核查报告（Excel 明细 11 sheet / PDF）")
     p_report.add_argument("pc_id", type=int, help="project_companies 记录 id")
     p_report.add_argument("--db", default=str(DEFAULT_DB), help="数据库路径")
@@ -100,6 +102,19 @@ def main(argv=None) -> int:
         except (ValueError, RuntimeError) as e:
             print(f"拒绝执行：{e}")
             return 2
+        if args.save_evidence and out.raw_text:
+            from .core.db import init_db as _init_db
+            from .core.evidence import save_evidence, verify_evidence
+
+            _init_db(args.save_evidence)
+            eid, fpath, digest = save_evidence(
+                args.save_evidence, source_id=src.id, url=out.query_url,
+                raw_text=out.raw_text, kind="p3r_probe", grade=None,
+                key_text=f"P3R 联调实测 · {args.name}")
+            ok, broken = verify_evidence(args.save_evidence, eid)
+            if broken:
+                print(f"[warn] 证据哈希校验异常：{broken}")
+            print(f"响应证据已入库: evidence_id={eid} sha256={digest} 文件={fpath}")
         print(format_outcome(src, out))
         return 0
 

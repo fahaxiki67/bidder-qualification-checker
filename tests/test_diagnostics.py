@@ -3,6 +3,7 @@
 不在测试中访问任何真实站点；真实查询仅由人工白天显式触发。
 """
 import json
+from pathlib import Path
 
 import pytest
 import yaml
@@ -76,3 +77,41 @@ def test_cli_check_source_refused_by_gate(tmp_path, monkeypatch):
     from app.main import main as cli
     rc = cli(["check-source", "creditchina", "--name", "某公司"])
     assert rc == 2
+
+
+def test_cli_check_source_save_evidence(tmp_path, monkeypatch):
+    """--save-evidence：联调实测的响应原文入库为哈希证据（P6 打通）。"""
+    import json as _json
+    import sqlite3
+
+    reg = tmp_path / "reg.yaml"
+    reg.write_text(yaml.safe_dump({"sources": [
+        {"id": "creditchina", "name": "信用中国", "level": "national",
+         "automation_mode": "auto",
+         "official_home": "https://www.creditchina.gov.cn/",
+         "query_url": "https://www.creditchina.gov.cn/q",
+         "adapter": "app.sources.national.creditchina"}]}, allow_unicode=True),
+        encoding="utf-8")
+    app_yaml = tmp_path / "app.yaml"
+    app_yaml.write_text("nightly_mock_only: false\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "REGISTRY_YAML", reg)
+    monkeypatch.setattr(runner, "APP_YAML", app_yaml)
+
+    fixture = {"result": []}
+    monkeypatch.setattr(
+        "app.sources.national.base.httpx_get",
+        lambda url, timeout, **kw: (200, _json.dumps(fixture)),
+        raising=False)
+
+    from app.main import main as cli
+    db = tmp_path / "ev.sqlite3"
+    rc = cli(["check-source", "creditchina", "--name", "测试公司",
+              "--daytime-override", "--save-evidence", str(db)])
+    assert rc == 0
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute("SELECT source_id, kind, sha256, file_path FROM evidence").fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "creditchina" and row[1] == "p3r_probe"
+    assert Path(row[3]).is_file()

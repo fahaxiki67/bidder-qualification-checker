@@ -22,3 +22,4 @@
 | 2026-09-05 (验收准备轮) | 验收材料 | docs/UAT.md 用户验收手册（Windows/macOS/报告证据三组操作单+常见问题）；check-source 离线端到端实测四路径（门控拒绝=2/白天放行=0/未知源拒绝/MANUAL 如实输出）；版本 0.14.0 | 等：用户按 UAT.md 验收双平台包；按 P3R_CHECKLIST.md 人工复核 |
 | 2026-09-05 (文档一致性轮) | README 版本漂移修复 | README 状态行停 v0.12.0（实际 0.14.0），即 P0 §六点名的漂移类；修正+新增 test_readme_version_not_stale 锁死；238→239 全绿 |
 | 2026-09-05 (侦察工具轮) | P3R 工具 | scripts/recon_portal.py 门户侦察（自动导航+截图+接口候选捕获）；本机假门户离线验证（成功捕获 /api/search?q= 候选+2 截图）；CHECKLIST 增快捷方式；开发依赖不进打包产物 | 用户白天对真实门户运行（一条命令），看图确认 URL 回填 |
+| 2026-09-05 (工具链闭环轮) | P3R 工具链闭环 | check-source --save-evidence：联调实测响应原文存为哈希证据（p3r_probe）接入 P6 证据链；修局部 import 遮蔽 init_db 的作用域坑；239→240 全绿 | P3R 工具链齐备：侦察(recon_portal)→回填(人工)→实测留证(check-source --save-evidence)→离线评判(run_check) |

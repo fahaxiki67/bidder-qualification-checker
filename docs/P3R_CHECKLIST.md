@@ -21,8 +21,8 @@
 3. 回填 `app/config/sources_registry.yaml`：`query_url` + `last_verified: <今天日期>`，
    必要时调整 `automation_mode`；
 4. 单源实测（不跑全量）：
-   `bqc check-source <source_id> --name "测试企业名" --uscc 9151... --daytime-override`
-   （`--daytime-override` 仅白天人工复核时使用；输出状态/发现/注记）；
+   `bqc check-source <source_id> --name "测试企业名" --uscc 9151... --daytime-override --save-evidence <db路径>`
+   （响应原文自动存为哈希证据，供回放与追溯；`--daytime-override` 仅白天人工复核时使用）；
 5. 按真实响应修正该源解析器（app/sources/...）→ 用真实样本回放 → 更新 docs/ACCEPTANCE.md。
 
 ## 逐源清单
