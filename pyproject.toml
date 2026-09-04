@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bidder-qualification-checker"
-version = "0.7.0"
+version = "0.8.0"
 description = "投标人资格智能核查系统 — 把官方公开数据与项目资格审查条款对应起来，形成可追溯的资格前审证据链"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,10 +16,12 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
     "httpx>=0.27",
+    "openpyxl>=3.1",
+    "reportlab>=4",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx>=0.27", "build>=1.2"]
+dev = ["pytest>=8", "httpx>=0.27", "build>=1.2", "pypdf>=4"]
 
 [project.scripts]
 bqc = "app.main:main"

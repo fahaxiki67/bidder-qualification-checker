@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-09-05（P7 报告：Excel 明细 11 sheet + PDF）
+
+### Added
+- Excel 核查明细表（app/reports/excel.py）：11 个 sheet 与任务书 §16 表结构对应
+  （封面与汇总/项目/企业/条款结论/查询日志/发现明细/证据清单/人工复核/数据源注册表/
+  状态口径说明/免责与合规声明）；取数口径=最新一次完整核查运行（与 Web 结果页一致）
+- PDF 核查报告（app/reports/pdf.py）：reportlab 内置 CID 中文字体（无需外部字体文件），
+  汇总/条款结论/查询日志/口径声明四节
+- CLI：`bqc report <pc_id> --excel x.xlsx [--pdf y.pdf]`（最新完整批次的报告导出）
+- scripts/make_report_samples.py：mock 演示样张生成（限制投标 FAIL/查询失败 ERROR/
+  无记录 NO_DATA 三场景）
+
+### 红线落实
+- 全部状态用语统一走 report_label——"查询失败/超时/待人工"绝不写成"无异常/正常"；
+  Excel"状态口径说明"sheet 与 PDF 声明节明示该红线
+
+### 测试
+- 221 → 224 项全绿（tests/test_reports.py：11 sheet 断言、ERROR=查询失败且全表
+  无"正常"、FAIL=触发否决条款、PDF 生成+文本抽取、CLI 子命令）
+
 ## [0.7.0] - 2026-09-05（P6 证据系统：SHA-256 留痕、回链、人工复核流、名单导入口）
 
 ### Added
