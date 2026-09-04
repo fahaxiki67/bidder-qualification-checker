@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-09-05（P8 Windows 打包：PyInstaller onefile + %LOCALAPPDATA%）
+
+### Added
+- app/paths.py：数据路径单点解析——源码/CLI 运行落当前工作目录 data/（行为不变）；
+  PyInstaller frozen 下 Windows 落 `%LOCALAPPDATA%\bqc\data\`、macOS 落
+  `~/Library/Application Support/bqc/data/`；BQC_DB 环境变量优先级始终最高
+- entry_bqc.py + bqc.spec：onefile 控制台应用 bqc(.exe)；注册表动态导入的
+  10 个数据源 adapter 全部显式 hiddenimports；config/templates 随包分发
+- scripts/start_server.bat：本地 Web UI 启动脚本（随 zip 分发）
+- CI 新增 package-windows job：构建 exe → frozen 冒烟（--version/--help/init-db
+  落点断言 %LOCALAPPDATA%）→ zip 上传 artifact；Release 附该 Windows 便携包
+
+### 测试
+- 224 → 228 项全绿（tests/test_paths.py：frozen 各平台路径解析 4 项）
+- 本机 Mac 实测 spec：构建→CLI→init-db 用户目录→serve 首页渲染全过
+
 ## [0.8.0] - 2026-09-05（P7 报告：Excel 明细 11 sheet + PDF）
 
 ### Added
