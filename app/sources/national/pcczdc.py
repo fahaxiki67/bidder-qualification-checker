@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from ...core.models import Company, Finding
-from .base import NationalAdapter, parse_date
+from .base import NationalAdapter, parse_date, subject_attrs
 
 
 class Adapter(NationalAdapter):
@@ -24,7 +24,8 @@ class Adapter(NationalAdapter):
                 grade=str(it.get("grade", "A")),
                 description=str(it.get("case_note", "破产重整案件公告")),
                 start_date=parse_date(it.get("file_date")), end_date=None,
-                attrs={"current": bool(it.get("current", True)),
+                attrs={**subject_attrs(company, it),
+                       "current": bool(it.get("current", True)),
                        "state": str(it.get("state", "")),
                        "case_code": it.get("case_code"), "court": it.get("court")},
             ))

@@ -29,7 +29,8 @@ REGISTRY = {
     ]
 }
 
-FIXTURE = {"result": [{"penalty_content": "省级住建主管部门限制投标一年",
+SUBJ = {"subject_name": "测试公司", "subject_uscc": "91510000TEST0000XX"}
+FIXTURE = {"result": [{**SUBJ, "penalty_content": "省级住建主管部门限制投标一年",
                        "authority_level": "province",
                        "start_date": "2026-08-05", "end_date": "2027-08-05"}]}
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from ...core.models import Company, Finding
-from .base import NationalAdapter
+from .base import NationalAdapter, subject_attrs
 
 
 class Adapter(NationalAdapter):
@@ -23,6 +23,7 @@ class Adapter(NationalAdapter):
                 kind="license_authority_status", source_id=self.source_id,
                 grade=str(it.get("grade", "A")),
                 description=str(it.get("cert_name", "资质登记")),
-                attrs={"status": str(it.get("status", "")), "cert": it.get("cert_name")},
+                attrs={**subject_attrs(company, it),
+                       "status": str(it.get("status", "")), "cert": it.get("cert_name")},
             ))
         return findings

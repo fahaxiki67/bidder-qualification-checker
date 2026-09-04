@@ -28,9 +28,11 @@ REGISTRY_NO_URL = {"sources": [
     dict(REGISTRY_WITH_URL["sources"][0], query_url=None),
 ]}
 
+SUBJ = {"subject_name": "测试公司", "subject_uscc": "91510000TEST0000XX"}
+
 # 历史处罚（基准日 2026 已过期）→ 条款1 仅 WARNING
 HISTORICAL = {"result": [
-    {"penalty_content": "省级住建主管部门限制投标两年",
+    {**SUBJ, "penalty_content": "省级住建主管部门限制投标两年",
      "authority_level": "province",
      "start_date": "2020-01-01", "end_date": "2022-01-01"},
 ]}

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from ...core.models import Company, Finding
-from .base import NationalAdapter, parse_date
+from .base import NationalAdapter, parse_date, subject_attrs
 
 
 class Adapter(NationalAdapter):
@@ -23,7 +23,8 @@ class Adapter(NationalAdapter):
                 kind="court_dishonesty", source_id=self.source_id, grade="A",
                 description=str(it.get("case_note", "失信被执行人记录")),
                 start_date=parse_date(it.get("file_date")), end_date=None,
-                attrs={"case_code": it.get("case_code"), "court": it.get("court"),
+                attrs={**subject_attrs(company, it),
+                       "case_code": it.get("case_code"), "court": it.get("court"),
                        "name": it.get("name")},
             ))
         for it in data.get("executed") or []:
@@ -31,7 +32,8 @@ class Adapter(NationalAdapter):
                 kind="court_executed", source_id=self.source_id, grade="A",
                 description=str(it.get("case_note", "被执行人记录")),
                 start_date=parse_date(it.get("file_date")), end_date=None,
-                attrs={"case_code": it.get("case_code"), "court": it.get("court"),
+                attrs={**subject_attrs(company, it),
+                       "case_code": it.get("case_code"), "court": it.get("court"),
                        "amount": it.get("amount")},
             ))
         return findings

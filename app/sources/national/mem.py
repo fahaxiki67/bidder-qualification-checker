@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 
 from ...core.models import Company, Finding
-from .base import NationalAdapter, parse_date
+from .base import NationalAdapter, parse_date, subject_attrs
 
 
 class Adapter(NationalAdapter):
@@ -24,15 +24,16 @@ class Adapter(NationalAdapter):
             grade = str(it.get("grade", "A"))
             level = it.get("authority_level", "national")
             start, end = parse_date(it.get("start_date")), parse_date(it.get("end_date"))
+            subj = subject_attrs(company, it)
             findings.append(Finding(
                 kind="penalty_safety", source_id=self.source_id, grade=grade,
                 description=content, start_date=start, end_date=end,
-                attrs={"authority_level": level},
+                attrs={**subj, "authority_level": level},
             ))
             if ("限制投标" in content or "限制采购" in content) and level in ("province", "national"):
                 findings.append(Finding(
                     kind="penalty_bid_restriction", source_id=self.source_id, grade=grade,
                     description=content, start_date=start, end_date=end,
-                    attrs={"authority_level": level},
+                    attrs={**subj, "authority_level": level},
                 ))
         return findings

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from urllib.parse import urlparse
 
+from ...core.matching import DIFFERENT_SUBJECT, check_subject
 from ...core.models import Company, Finding, SourceRef
 from ...core.status import Status
 
@@ -191,6 +192,26 @@ def parse_date(s) -> date | None:
         return None
 
 
+def subject_attrs(company: Company, record: dict) -> dict:
+    """对源记录做主体一致性检查，返回随 Finding.attrs 留痕的可追溯字段（P0.5 §六）。
+
+    记录缺失主体字段时同样经过判定（UNCONFIRMED），不得默认视为同一主体。
+    adapter 解析契约：源记录带 subject_name / subject_uscc 字段。
+    """
+    src_name = str(record.get("subject_name") or "").strip()
+    src_uscc = str(record.get("subject_uscc") or "").strip()
+    m = check_subject(company.name, company.uscc, src_name, src_uscc)
+    return {
+        "requested_company_name": company.name,
+        "requested_company_uscc": company.uscc,
+        "source_subject_name": src_name,
+        "source_subject_uscc": src_uscc,
+        "matched_by": m.matched_by,
+        "match_result": m.match_result,
+        "match_reason": m.reason,
+    }
+
+
 @dataclass
 class AdapterOutcome:
     """adapter 对单源的核查结果：查询状态 + 采集到的客观事实。"""
@@ -227,8 +248,23 @@ class NationalAdapter:
         except Exception as e:  # 解析失败=查询失败，绝不伪造成功
             return AdapterOutcome(self.source_id, Status.ERROR, [], fr.url,
                                   note=f"响应解析失败：{e.__class__.__name__}: {e}")
-        if findings:
-            return AdapterOutcome(self.source_id, Status.PASS, findings, fr.url, note="查询成功")
+        # 主体一致性关卡（P0.5 §六）：DIFFERENT_SUBJECT 的记录不得成为本企业证据
+        kept: list[Finding] = []
+        dropped = 0
+        for f in findings:
+            if f.attrs.get("match_result") == DIFFERENT_SUBJECT:
+                dropped += 1
+                continue
+            kept.append(f)
+        note = "查询成功"
+        if dropped:
+            note += f"；剔除 {dropped} 条非同一主体记录（主体标识对不上，属其他企业）"
+        if kept:
+            return AdapterOutcome(self.source_id, Status.PASS, kept, fr.url, note=note)
+        if dropped:
+            # 来源只返回了别的企业的记录：对本企业而言=未检索到记录，绝不能算 PASS
+            return AdapterOutcome(self.source_id, Status.NO_DATA, [], fr.url,
+                                  note=note + "；未检索到本企业的记录")
         return AdapterOutcome(self.source_id, Status.NO_DATA, [], fr.url, note="查询成功，未检索到记录")
 
     def parse(self, text: str, *, company: Company) -> list[Finding]:

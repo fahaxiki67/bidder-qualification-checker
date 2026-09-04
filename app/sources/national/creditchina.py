@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from ...core.models import Company, Finding
-from .base import NationalAdapter, parse_date
+from .base import NationalAdapter, parse_date, subject_attrs
 
 _REVOCATION_STATES = (
     "责令停产停业", "暂扣营业执照", "吊销营业执照", "暂扣许可证", "吊销许可证", "吊销资质证书",
@@ -29,11 +29,12 @@ class Adapter(NationalAdapter):
             content = str(it.get("penalty_content", ""))
             grade = str(it.get("grade", "A"))
             start, end = parse_date(it.get("start_date")), parse_date(it.get("end_date"))
+            subj = subject_attrs(company, it)
             if "限制投标" in content or "限制采购" in content:
                 findings.append(Finding(
                     kind="penalty_bid_restriction", source_id=self.source_id, grade=grade,
                     description=content, start_date=start, end_date=end,
-                    attrs={"authority_level": it.get("authority_level", "city")},
+                    attrs={**subj, "authority_level": it.get("authority_level", "city")},
                 ))
                 continue
             state = next((s for s in _REVOCATION_STATES if s in content), None)
@@ -41,11 +42,11 @@ class Adapter(NationalAdapter):
                 findings.append(Finding(
                     kind="penalty_business", source_id=self.source_id, grade=grade,
                     description=content, start_date=start, end_date=end,
-                    attrs={"current": bool(it.get("current", True)), "status": state},
+                    attrs={**subj, "current": bool(it.get("current", True)), "status": state},
                 ))
                 continue
             findings.append(Finding(
                 kind="penalty_other", source_id=self.source_id, grade=grade,
-                description=content, start_date=start, end_date=end, attrs={},
+                description=content, start_date=start, end_date=end, attrs=subj,
             ))
         return findings

@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import date
 
 from .evidence import can_support_fail
+from .matching import UNCONFIRMED
 from .models import Company, Finding, Project, RuleResult
 from .status import Status, combine_decision
 
@@ -218,13 +219,41 @@ DEFAULT_RULES = (
     LicenseValidityRule(),
 )
 
+#: 主体一致性待确认的兜底条款（P0.5 §六）：UNCONFIRMED 记录不得进业务条款，
+#: 由本条款统一转人工；随 DEFAULT_RULES 之外的附加结果产出。
+SUBJECT_CONFIRMATION_RULE_ID = "rule_subject_confirmation"
+
+
+def subject_confirmation_result(unconfirmed: list[Finding]) -> RuleResult:
+    """无法确认主体的记录：不得作确定性结论，转人工（§六规则 7）。"""
+    reasons = []
+    for f in unconfirmed:
+        reasons.append(
+            f"[{f.source_id}] 主体一致性未确认（{f.attrs.get('match_reason', '')}），"
+            f"暂不作为否决证据：{f.description}"
+        )
+    return RuleResult(
+        rule_id=SUBJECT_CONFIRMATION_RULE_ID,
+        title="主体一致性待人工确认",
+        status=Status.MANUAL.value,
+        reasons=reasons,
+        company=None,
+    )
+
 
 class RuleEngine:
     def __init__(self, rules=DEFAULT_RULES):
         self.rules = list(rules)
 
     def run_all(self, findings, project: Project, company: Company | None = None) -> list[RuleResult]:
-        return [rule.evaluate(findings, project, company) for rule in self.rules]
+        # 主体一致性强制点（P0.5 §六）：UNCONFIRMED 记录绝不进业务条款（防止
+        # 同名/缺码记录被错并成 FAIL），统一转人工兜底条款
+        confirmed = [f for f in findings if f.attrs.get("match_result") != UNCONFIRMED]
+        unconfirmed = [f for f in findings if f.attrs.get("match_result") == UNCONFIRMED]
+        results = [rule.evaluate(confirmed, project, company) for rule in self.rules]
+        if unconfirmed:
+            results.append(subject_confirmation_result(unconfirmed))
+        return results
 
     @staticmethod
     def overall(results) -> str:

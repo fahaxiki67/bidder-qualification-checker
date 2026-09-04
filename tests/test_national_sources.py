@@ -28,6 +28,8 @@ REGISTRY = SourceRegistry.from_yaml(
     Path(app.__file__).resolve().parent / "config" / "sources_registry.yaml")
 NATIONAL = REGISTRY.filter(level="national")
 COMPANY = Company(name="测试建筑有限公司", uscc="91510000TEST0000XX")
+SUBJ = {"subject_name": "测试建筑有限公司", "subject_uscc": "91510000TEST0000XX"}
+
 PROJECT = Project(name="测试项目", base_date=date(2026, 9, 4))
 
 
@@ -138,10 +140,10 @@ def test_fetch_non2xx_without_risk_code_is_error():
 
 def test_creditchina_extracts_penalty_kinds_and_rule_fails():
     payload = {"result": [
-        {"penalty_content": "省级住建主管部门限制投标一年", "authority_level": "province",
+        {**SUBJ, "penalty_content": "省级住建主管部门限制投标一年", "authority_level": "province",
          "start_date": "2026-08-05", "end_date": "2027-08-05"},
-        {"penalty_content": "吊销营业执照", "current": True},
-        {"penalty_content": "罚款 5 万元", "start_date": "2026-01-01"},
+        {**SUBJ, "penalty_content": "吊销营业执照", "current": True},
+        {**SUBJ, "penalty_content": "罚款 5 万元", "start_date": "2026-01-01"},
     ]}
     out = query_source(source_with("creditchina", "https://www.creditchina.gov.cn/q"),
                        COMPANY, get=get_ok(payload))
@@ -153,7 +155,7 @@ def test_creditchina_extracts_penalty_kinds_and_rule_fails():
 
 
 def test_creditchina_expired_restriction_is_only_warning():
-    payload = {"result": [{"penalty_content": "限制投标一年", "authority_level": "province",
+    payload = {"result": [{**SUBJ, "penalty_content": "限制投标一年", "authority_level": "province",
                            "start_date": "2024-01-01", "end_date": "2025-01-01"}]}
     out = query_source(source_with("creditchina", "https://www.creditchina.gov.cn/q"),
                        COMPANY, get=get_ok(payload))
@@ -161,16 +163,16 @@ def test_creditchina_expired_restriction_is_only_warning():
 
 
 def test_zxgk_extracts_court_records():
-    payload = {"dishonest": [{"case_code": "(2026)川01执100", "court": "成都中院",
+    payload = {"dishonest": [{**SUBJ, "case_code": "(2026)川01执100", "court": "成都中院",
                               "file_date": "2026-05-01", "case_note": "有履行能力而拒不履行"}],
-               "executed": [{"case_code": "(2026)川01执200", "amount": "50万元"}]}
+               "executed": [{**SUBJ, "case_code": "(2026)川01执200", "amount": "50万元"}]}
     out = _query_zxgk_with(get_ok(payload))
     assert out.status is Status.PASS and len(out.findings) == 2
     assert {f.kind for f in out.findings} == {"court_dishonesty", "court_executed"}
 
 
 def test_mem_safety_penalty_and_bid_restriction():
-    payload = {"penalties": [{"content": "安全生产许可证被暂扣并限制投标半年",
+    payload = {"penalties": [{**SUBJ, "content": "安全生产许可证被暂扣并限制投标半年",
                               "authority_level": "national",
                               "start_date": "2026-07-01", "end_date": "2026-12-31"}]}
     out = query_source(source_with("mem_safety_credit", "https://www.mem.gov.cn/q"),
@@ -182,15 +184,15 @@ def test_mem_safety_penalty_and_bid_restriction():
 def test_jzsc_license_status_feeds_validity_rule():
     url = "https://jzsc.mohurd.gov.cn/q"
     ok = query_source(source_with("jzsc", url), COMPANY,
-                      get=get_ok({"qualifications": [{"cert_name": "施工总承包一级", "status": "正常"}]}))
+                      get=get_ok({"qualifications": [{**SUBJ, "cert_name": "施工总承包一级", "status": "正常"}]}))
     revoked = query_source(source_with("jzsc", url), COMPANY,
-                           get=get_ok({"qualifications": [{"cert_name": "施工总承包一级", "status": "吊销"}]}))
+                           get=get_ok({"qualifications": [{**SUBJ, "cert_name": "施工总承包一级", "status": "吊销"}]}))
     assert rule_status("rule_license_validity", ok.findings) is Status.NO_DATA
     assert rule_status("rule_license_validity", revoked.findings) is Status.FAIL
 
 
 def test_pcczdc_bankruptcy_fails_rule():
-    payload = {"cases": [{"state": "宣告破产", "current": True,
+    payload = {"cases": [{**SUBJ, "state": "宣告破产", "current": True,
                           "case_code": "(2026)川01破5号", "court": "成都中院"}]}
     out = query_source(source_with("pcczdc", "https://pccz.court.gov.cn/q"),
                        COMPANY, get=get_ok(payload))
