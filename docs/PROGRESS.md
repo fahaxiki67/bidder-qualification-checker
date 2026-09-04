@@ -23,3 +23,4 @@
 | 2026-09-05 (文档一致性轮) | README 版本漂移修复 | README 状态行停 v0.12.0（实际 0.14.0），即 P0 §六点名的漂移类；修正+新增 test_readme_version_not_stale 锁死；238→239 全绿 |
 | 2026-09-05 (侦察工具轮) | P3R 工具 | scripts/recon_portal.py 门户侦察（自动导航+截图+接口候选捕获）；本机假门户离线验证（成功捕获 /api/search?q= 候选+2 截图）；CHECKLIST 增快捷方式；开发依赖不进打包产物 | 用户白天对真实门户运行（一条命令），看图确认 URL 回填 |
 | 2026-09-05 (工具链闭环轮) | P3R 工具链闭环 | check-source --save-evidence：联调实测响应原文存为哈希证据（p3r_probe）接入 P6 证据链；修局部 import 遮蔽 init_db 的作用域坑；239→240 全绿 | P3R 工具链齐备：侦察(recon_portal)→回填(人工)→实测留证(check-source --save-evidence)→离线评判(run_check) |
+| 2026-09-05 (CLI 收口轮) | CLI 体验 | bqc verify-evidence 证据校验子命令（UAT 两用）；report/import-bans 友好报错（退出码 2 无堆栈）；report 空库先建表；240→241 全绿 |
