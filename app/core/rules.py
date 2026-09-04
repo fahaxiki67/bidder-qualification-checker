@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 from .evidence import can_support_fail
-from .matching import UNCONFIRMED
+from .matching import DIFFERENT_SUBJECT, UNCONFIRMED
 from .models import Company, Finding, Project, RuleResult
 from .status import Status, combine_decision
 
@@ -326,9 +326,14 @@ class RuleEngine:
         self.specs = specs if specs is not None else load_rule_specs()
 
     def run_all(self, findings, project: Project, company: Company | None = None) -> list[RuleResult]:
-        # 主体一致性强制点（P0.5 §六）：UNCONFIRMED 记录绝不进业务条款（防止
-        # 同名/缺码记录被错并成 FAIL），统一转人工兜底条款
-        confirmed = [f for f in findings if f.attrs.get("match_result") != UNCONFIRMED]
+        # 主体一致性强制点（P0.5 §六 / P4 加固）：
+        # - UNCONFIRMED：不得进业务条款（防错并成 FAIL），统一转人工兜底；
+        # - DIFFERENT_SUBJECT：非同一主体的记录对本企业=无记录，任何入口
+        #   （adapter 已剔除；人工导入直调 parse 的路径在此兜底）都不得形成证据。
+        confirmed = [
+            f for f in findings
+            if f.attrs.get("match_result") not in (UNCONFIRMED, DIFFERENT_SUBJECT)
+        ]
         unconfirmed = [f for f in findings if f.attrs.get("match_result") == UNCONFIRMED]
         results: list[RuleResult] = []
         for rule in self.rules:

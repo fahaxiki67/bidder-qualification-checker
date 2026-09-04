@@ -108,8 +108,8 @@ sources:
     authority: 中国电力建设集团有限公司
     source_type: 集团禁入名单
     official_home: https://ec.powerchina.cn/
-    automation_mode: auto
+    automation_mode: manual_intake   # 内部三级禁入名单，公开门户不可自动核验 → 查询一律 MANUAL
     evidence_grade: A
     enabled: true
     adapter: app.sources.owners.powerchina
-    notes: 股份公司/子企业/基层单位三级禁入；内部名单无法公开核验时必须返回待人工核查
+    notes: 股份公司/子企业/基层单位三级禁入；名单经人工导入后离线评判（parse 契约见 adapter），无法公开核验时必须返回待人工核查

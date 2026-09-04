@@ -61,8 +61,16 @@ def plan_with_exclusions(company: Company, project: Project,
             continue
         if e.level == "national":
             add(e)
-        elif e.level == "owner" and project.owner_group and e.owner_group == project.owner_group:
-            add(e)
+        elif e.level == "owner":
+            # 集团专项源：仅服务匹配的招标人集团（P4）；不匹配=不适用，显式留痕
+            if project.owner_group and e.owner_group == project.owner_group:
+                add(e)
+            else:
+                not_applicable.append((
+                    e,
+                    f"集团专项不适用：数据源属[{e.owner_group}]，"
+                    f"本项目招标人集团[{project.owner_group or '未指定'}]",
+                ))
         elif e.level == "province":
             hit_registered = company.registered_province and e.province == company.registered_province
             hit_project = project.province and e.province == project.province

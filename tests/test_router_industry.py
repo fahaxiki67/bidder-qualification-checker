@@ -76,7 +76,8 @@ def test_plan_with_exclusions_industry_gate(registry):
     # 项目未填行业：行业限定源不适用（宁可不查转人工，不得硬查）
     proj_none = Project(name="项目", base_date=date(2026, 9, 5))
     route3 = plan_with_exclusions(COMPANY, proj_none, registry)
-    assert [e.id for e, _ in route3.not_applicable] == ["jzsc"]
+    # P4 起：未指定招标人集团的电建源同样显式 NOT_APPLICABLE（原为静默跳过）
+    assert [e.id for e, _ in route3.not_applicable] == ["jzsc", "powerchina_ban"]
 
 
 def test_plan_compat_returns_planned_only(registry):

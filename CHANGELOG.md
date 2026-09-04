@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-09-05（P4 集团数据源：中国电建禁入供应商 adapter）
+
+### Added
+- `app/sources/owners/powerchina.py`：中国电建禁入/受限供应商名单 adapter
+  （三级口径：股份公司级/子企业级/基层单位级；记录带 document_name 证据溯源字段）
+- 人工导入离线评判契约：名单记录（subject_name/subject_uscc + list_level/scope/
+  起止日期）经主体一致性关卡后产出客观 owner_ban Finding，条款4 由 RuleEngine 评判——
+  有效期内 FAIL、过期仅 WARNING、他集团记录不适用、缺码记录转人工
+- 注册表 automation_mode=manual_intake：内部名单公开门户不可自动核验，
+  查询一律 MANUAL（模式注记优先于"URL 未复核"注记），绝不伪造查询成功
+- 路由：集团专项源与项目招标人集团不匹配时显式 NOT_APPLICABLE（原为静默跳过）
+
+### Fixed
+- engine 主体一致性纵深加固：DIFFERENT_SUBJECT 记录在任何入口都不得形成证据
+  （此前仅 adapter 层剔除，人工导入直调 parse 的路径可绕过——同名不同码的
+  内部名单记录可能误判 FAIL，P4 专项测试暴露后即修）
+
+### 测试
+- 194 → 204 项全绿（新增 tests/test_owner_powerchina.py 10 项）
+
 ## [0.4.0] - 2026-09-05（P0.5 可靠性闭环 + 真实业务样本回放）
 
 ### Fixed

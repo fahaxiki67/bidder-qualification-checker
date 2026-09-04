@@ -249,15 +249,19 @@ class NationalAdapter:
 
     def query(self, company: Company, source: SourceRef, *, get=None, timeout: float = 15.0) -> AdapterOutcome:
         url = source.query_url
+        # 模式注记优先于"URL 未复核"：manual_intake/验证码源即使补了 URL 也不可自动查询
+        if source.automation_mode in ("auto_fill_manual_verify", "manual_intake"):
+            return AdapterOutcome(
+                self.source_id, Status.MANUAL, [], url or source.official_home,
+                note=("该源需验证码/人工介入（auto_fill_manual_verify），骨架期一律转人工"
+                      if source.automation_mode == "auto_fill_manual_verify"
+                      else "内部名单无法公开自动核验（manual_intake）：经人工导入名单后可离线评判，"
+                           "查询一律转人工核查"),
+            )
         if not url:
             return AdapterOutcome(
                 self.source_id, Status.MANUAL, [], source.official_home,
                 note="查询接口未人工复核（红线：不得写死未复核接口），转人工核查",
-            )
-        if source.automation_mode == "auto_fill_manual_verify":
-            return AdapterOutcome(
-                self.source_id, Status.MANUAL, [], url,
-                note="该源需验证码/人工介入（auto_fill_manual_verify），骨架期一律转人工",
             )
         fr = fetch(url, get=get, timeout=timeout)
         if fr.status is not Status.PASS:
