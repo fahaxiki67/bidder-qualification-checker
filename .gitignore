@@ -14,9 +14,9 @@ htmlcov/
 
 # 用户数据与证据 —— 严禁提交（任务书 §15）
 local/
-data/
-evidence/
-reports/
+/data/
+/evidence/
+/reports/
 *.sqlite
 *.sqlite3
 *.db
