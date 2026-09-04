@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.16.0] - 2026-09-05（P3R 工具：门户自动侦察脚本）
+
+### Added
+- scripts/recon_portal.py：官方门户自动导航侦察——打开入口、填入测试企业名、
+  点击查询、截图 2 张、捕获页面发出的接口请求候选（candidates.json）。
+  供白天人工复核使用：人看截图与候选清单确认后**手工**回填（工具不回填）。
+  已用本机假门户离线验证（自动捕获 /api/search?q=... 候选）。
+  依赖为开发用（playwright/pyyaml，非运行时依赖，不进打包产物）。
+- docs/P3R_CHECKLIST.md 增加快捷方式说明
+
+### 纪律
+夜间不运行（WORKPLAN 真实站点访问仅限白天人工配合）；单页低频；遇验证码截图即停。
+
 ## [0.15.0] - 2026-09-05（文档一致性收口：README 版本漂移修复+测试锁死）
 
 ### Fixed
