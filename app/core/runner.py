@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from datetime import date
 from pathlib import Path
 
@@ -20,7 +21,13 @@ from .models import Company, Finding, Project
 from .registry import SourceRegistry
 from .router import plan
 from .rules import RuleEngine
-from .status import Status, combine_data, combine_decision, needs_manual, overall as overall_status
+from .status import (
+    Status,
+    combine_data,
+    combine_decision,
+    needs_manual,
+    overall as overall_status,
+)
 
 # 配置随包分发（app/config/ 进入 wheel），源码运行与安装运行读到同一份
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -63,8 +70,15 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
     nightly_mock_only=true 时拒绝执行）。query_url 未复核的源返回 MANUAL。
     """
     conn = connect(db_path)
+    run_id = uuid.uuid4().hex  # 核查批次隔离（P0.5 §五）：每次运行唯一，历史不混入
     try:
         pc, proj, comp = _load_check_target(conn, pc_id)
+        conn.execute(
+            "INSERT INTO check_runs (run_id, project_id, company_id, scenario, started_at) "
+            "VALUES (?, ?, ?, ?, datetime('now', 'localtime'))",
+            (run_id, proj["id"], comp["id"], "real_sources" if real_sources else scenario),
+        )
+        conn.commit()
         project = Project(
             name=proj["name"], province=proj["province"], industry=proj["industry"],
             owner_group=proj["owner_group"],
@@ -119,10 +133,10 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                  "findings": [x.__dict__ for x in fnd]},
                 ensure_ascii=False, default=str)
             cur = conn.execute(
-                "INSERT INTO source_queries (project_id, company_id, source_id, status, query_url, raw_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO source_queries (project_id, company_id, source_id, status, query_url, raw_json, run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (proj["id"], comp["id"], e.id, st.value,
-                 e.query_url or e.official_home, payload),
+                 e.query_url or e.official_home, payload, run_id),
             )
             qid = cur.lastrowid
             for x in fnd:
@@ -137,18 +151,25 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
 
         for r in results:
             conn.execute(
-                "INSERT INTO rule_results (project_id, company_id, rule_id, status, reasons_json) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO rule_results (project_id, company_id, rule_id, status, reasons_json, run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (proj["id"], comp["id"], r.rule_id, r.status,
-                 json.dumps(r.reasons, ensure_ascii=False)),
+                 json.dumps(r.reasons, ensure_ascii=False), run_id),
             )
         # 业务判断与数据获取分层合并：数据异常/人工复核绝不被 WARNING/PASS 掩盖（P0.5 §三）
         decision = combine_decision(r.status for r in results)
         data = combine_data(source_status.values())
+        manual_required = needs_manual((r.status for r in results), source_status.values())
         overall = overall_status(decision, data).value
+        # 批次收口：结论绑定本批次；历史批次永久保留，绝不混入当前展示
         conn.execute(
-            "UPDATE project_companies SET overall_status = ?, status = 'done' WHERE id = ?",
-            (overall, pc_id),
+            "UPDATE check_runs SET decision_status = ?, data_status = ?, manual_required = ?, "
+            "overall_status = ?, finished_at = datetime('now', 'localtime') WHERE run_id = ?",
+            (decision.value, data.value, int(manual_required), overall, run_id),
+        )
+        conn.execute(
+            "UPDATE project_companies SET overall_status = ?, status = 'done', run_id = ? WHERE id = ?",
+            (overall, run_id, pc_id),
         )
         conn.commit()
         return overall

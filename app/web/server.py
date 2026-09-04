@@ -112,6 +112,15 @@ def _load_result(pc_id: int):
         ).fetchone()
         if pc is None:
             return None
+        # 只取最新一次【完整】运行（P0.5 §五）：历史批次保留可溯，但不混入当前展示
+        run = conn.execute(
+            "SELECT run_id, scenario, decision_status, data_status, manual_required, "
+            "overall_status, started_at, finished_at FROM check_runs "
+            "WHERE project_id = ? AND company_id = ? AND finished_at IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1",
+            (pc["project_id"], pc["company_id"]),
+        ).fetchone()
+        run_id = run["run_id"] if run else None
         project = conn.execute(
             "SELECT name, province, industry, owner_group, base_date FROM projects WHERE id = ?",
             (pc["project_id"],),
@@ -123,22 +132,22 @@ def _load_result(pc_id: int):
         rules = [
             dict(r) for r in conn.execute(
                 "SELECT rule_id, status, reasons_json FROM rule_results "
-                "WHERE project_id = ? AND company_id = ? ORDER BY id",
-                (pc["project_id"], pc["company_id"]),
+                "WHERE project_id = ? AND company_id = ? AND run_id = ? ORDER BY id",
+                (pc["project_id"], pc["company_id"], run_id),
             ).fetchall()
-        ]
+        ] if run_id else []
         queries = [
             dict(q) for q in conn.execute(
                 "SELECT source_id, status, queried_at, query_url FROM source_queries "
-                "WHERE project_id = ? AND company_id = ? ORDER BY id",
-                (pc["project_id"], pc["company_id"]),
+                "WHERE project_id = ? AND company_id = ? AND run_id = ? ORDER BY id",
+                (pc["project_id"], pc["company_id"], run_id),
             ).fetchall()
-        ]
+        ] if run_id else []
         import json
         for r in rules:
             r["reasons"] = json.loads(r.pop("reasons_json") or "[]")
         return {"pc": dict(pc), "project": dict(project), "company": dict(company),
-                "rules": rules, "queries": queries}
+                "rules": rules, "queries": queries, "run": dict(run) if run else None}
     finally:
         conn.close()
 
@@ -152,13 +161,20 @@ def result(request: Request, pc_id: int):
     for r in data["rules"]:
         r["badge"] = BADGE.get(r["status"], "badge-muted")
         r["label"] = report_label(Status(r["status"]))
-    overall = data["pc"].get("overall_status")
+    run = data["run"]
+    overall = run["overall_status"] if run else None
+    data_status = run["data_status"] if run else None
+    manual_required = bool(run["manual_required"]) if run else False
     return TEMPLATES.TemplateResponse(
         request, "result.html",
         {
             "d": data, "overall": overall,
             "overall_label": report_label(Status(overall)) if overall else "待核查",
             "overall_badge": BADGE.get(overall, "badge-muted"),
+            "data_status": data_status,
+            "data_label": report_label(Status(data_status)) if data_status else None,
+            "data_badge": BADGE.get(data_status, "badge-muted"),
+            "manual_required": manual_required,
             "version": __version__,
         },
     )

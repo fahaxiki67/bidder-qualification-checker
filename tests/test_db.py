@@ -2,7 +2,7 @@ import app
 from app.core import db
 
 
-def test_init_db_creates_all_ten_tables(tmp_path):
+def test_init_db_creates_all_tables(tmp_path):
     p = tmp_path / "data" / "bqc.sqlite3"
     db.init_db(p)
     tables = db.table_names(p)
