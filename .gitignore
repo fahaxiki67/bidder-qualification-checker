@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 用户数据与证据 —— 严禁提交（任务书 §15）
+local/
+data/
+evidence/
+reports/
+*.sqlite
+*.sqlite3
+*.db
+*.xlsx
+*.pdf
+!docs/**/*.pdf
+
+# 凭证与配置
+.env
+.env.*
+*.pem
+*.key
+cookies*.json
+credentials*.json
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
