@@ -1,0 +1,169 @@
+name: Release
+
+# P10：打 tag 自动出 Release，挂双平台产物与 Python 制品。
+# 测试先行的门：三平台 pytest 全绿才会进入构建与发布。
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Dependency sanity check
+        run: python -m pip check
+      - name: Installed-package smoke test
+        run: python scripts/smoke_installed.py
+      - name: Test
+        run: pytest -q
+
+  build-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  package-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pyinstaller
+      - name: Build exe (PyInstaller onefile)
+        run: pyinstaller bqc.spec --noconfirm
+      - name: Smoke frozen exe (含 %LOCALAPPDATA% 数据目录验证)
+        shell: pwsh
+        run: |
+          dist\bqc.exe --version
+          dist\bqc.exe --help *> $null
+          New-Item -ItemType Directory -Force -Path smoke-cwd | Out-Null
+          Push-Location smoke-cwd
+          ..\dist\bqc.exe init-db
+          Pop-Location
+          $db = Join-Path $env:LOCALAPPDATA "bqc\data\bqc.sqlite3"
+          if (-not (Test-Path $db)) { Write-Error "frozen 数据目录未落在 LOCALAPPDATA: $db"; exit 1 }
+      - name: Package zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+          Copy-Item dist\bqc.exe stage\
+          Copy-Item scripts\start_server.bat stage\
+          Compress-Archive -Path stage\* -DestinationPath bqc-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bqc-windows-x64
+          path: bqc-windows-x64.zip
+          retention-days: 7
+
+  package-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pyinstaller
+      - name: Build binary (PyInstaller onefile, arm64)
+        run: pyinstaller bqc.spec --noconfirm
+      - name: Smoke frozen binary
+        run: |
+          set -e
+          ./dist/bqc --version
+          ./dist/bqc --help > /dev/null
+          mkdir smoke-cwd && cd smoke-cwd
+          ../dist/bqc init-db
+          cd ..
+          test -f "$HOME/Library/Application Support/bqc/data/bqc.sqlite3" \
+            || { echo "frozen 数据目录未落在 Application Support"; exit 1; }
+          ./dist/bqc serve --port 8123 & SERVE_PID=$!
+          sleep 6
+          curl -sf http://127.0.0.1:8123/ | grep -q "投标人资格智能核查系统" \
+            || { echo "serve 首页验证失败"; kill $SERVE_PID; exit 1; }
+          kill $SERVE_PID
+      - name: Package zip
+        run: |
+          mkdir stage
+          cp dist/bqc stage/
+          cp scripts/start_server.command stage/
+          chmod +x stage/bqc stage/start_server.command
+          cd stage && zip -r ../bqc-macOS-arm64.zip . && cd ..
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bqc-macOS-arm64
+          path: bqc-macOS-arm64.zip
+          retention-days: 7
+
+  release:
+    needs: [test, build-python, package-windows, package-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: artifact-dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: bqc-windows-x64
+          path: artifact-win
+      - uses: actions/download-artifact@v4
+        with:
+          name: bqc-macOS-arm64
+          path: artifact-mac
+      - name: Collect assets and SHA256SUMS
+        run: |
+          mkdir -p release
+          cp artifact-dist/* release/
+          cp artifact-win/bqc-windows-x64.zip release/
+          cp artifact-mac/bqc-macOS-arm64.zip release/
+          cd release && shasum -a 256 * > SHA256SUMS.txt && ls -la
+      - name: Extract release notes from CHANGELOG
+        run: |
+          python scripts/extract_changelog.py "${GITHUB_REF_NAME}" > release_notes.md
+          cat release_notes.md
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${GITHUB_REF_NAME} — 投标人资格智能核查系统" \
+            --notes-file release_notes.md \
+            release/*

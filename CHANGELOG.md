@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] - 2026-09-05（P10 收尾：打 tag 自动 Release，双平台产物）
+
+### Added
+- .github/workflows/release.yml：push tag `v*` 自动执行——三平台 pytest 门 →
+  wheel/sdist 构建 → Windows exe 打包冒烟（LOCALAPPDATA 断言）→ macOS arm64
+  打包冒烟（serve 实访问断言）→ 自动创建 GitHub Release 并挂全部产物
+  （wheel/sdist/Windows zip/macOS zip/SHA256SUMS），说明文字自动取自 CHANGELOG
+  对应版本章节（scripts/extract_changelog.py）
+- 本 v0.11.0 Release 即由该工作流自动生成（完成标准实证）
+
+### 说明
+- WORKPLAN 十个阶段（P0~P10）至此全部完成；真实官网联调（P3R）与各源
+  query_url 人工复核仍为待办，需白天人工配合——"已支持数据源清单"在真实
+  联调完成前保持未勾选，不伪造支持状态
+
 ## [0.10.0] - 2026-09-05（P9 macOS 打包：PyInstaller arm64 + .command 启动脚本）
 
 ### Added
