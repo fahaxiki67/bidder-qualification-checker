@@ -15,11 +15,17 @@ All notable changes to this project will be documented in this file.
 - 抽取管线输出客观 Finding（限制投标/证照当前状态/破产/法院记录等 kind），与 RuleEngine 联动
 - 测试 +47 项共 99 项全绿：SSRF 专项、传输状态映射、各源 fixture mock 解析、
   规则联动（FAIL/WARNING/NO_DATA）、NEVER_PASS 不变量
+- runner 真实数据源链路：`run_check(real_sources=True)` 按注册表逐源执行 adapter
+  （传输层 get 可注入测试），受 `nightly_mock_only` 门控（夜间/演示模式拒绝真实查询）；
+  数据源失败状态（TIMEOUT/ERROR/BLOCKED/MANUAL）折算进总体结论，绝不归约 PASS
+
+### Fixed
+- 演示场景 query_error 的总体结论由 NO_DATA 修正为 ERROR：
+  此前数据源查询失败被吞（source_queries 全记 PASS、source_error 无规则消费）
 
 ### 待办（真实联调，留白天人工配合）
 - 各源查询接口人工复核后回填 `query_url`/`last_verified`，解析器按真实响应格式修正
-- runner 真实链路接入（`nightly_mock_only` 门控，白天才启用）
-- zxgk/gsxt 验证码源：自动导航+人工验证联调
+- zxgk/gsxt 验证码源：自动导航+人工验证联调；Web 层真实模式入口
 
 ## [0.2.0] - 2026-09-04（P2 本地 Web UI）
 
