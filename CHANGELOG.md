@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.0] - 2026-09-05（CLI 体验收口：证据校验入口 + 友好报错）
+
+### Added
+- CLI `bqc verify-evidence --db <路径>`：随时复核证据完整性（SHA-256 比对，
+  正常/损坏分列，退出码区分）——验收（UAT C 组）与日常自查两用
+
+### Fixed
+- `bqc report` 对不存在的核查记录：友好提示退出码 2（此前堆栈）
+- `bqc import-bans` 文件不存在：友好提示退出码 2（此前堆栈）
+- report 对空库自动先建表
+
+### 测试
+- 240 → 241 项全绿
+
 ## [0.17.0] - 2026-09-05（联调工具链闭环：实测响应一键留证）
 
 ### Added
