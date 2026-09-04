@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-09-04（P2 本地 Web UI）
+
+### Added
+- 本地 Web UI（仅监听 127.0.0.1）：`bqc serve` 启动
+- 首页表单：项目信息（名称/所在地/行业/招标人集团/基准日/近几年）+ 投标人（名称/USCC/注册地）+ 演示场景
+- 核查结果页：总体结论徽章、条款核查明细（每条判定依据）、数据源查询日志
+- 核查执行器 runner：数据源路由 → mock 采集 → 规则评判 → SQLite 落库 全链路
+- 8 种 mock 演示场景，覆盖 4 条款 FAIL / 历史已解除 WARNING / 证照表面过期 / 查询失败 ERROR / 无记录 NO_DATA
+- Web 测试 5 项：结果页保证 ERROR/NO_DATA 绝不显示为"正常"
+
 ## [0.1.0] - 2026-09-04（P1 架构骨架）
 
 ### Added

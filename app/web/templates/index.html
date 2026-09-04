@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<form method="post" action="/projects">
+  <div class="card">
+    <h2>项目信息</h2>
+    <div class="grid">
+      <div>
+        <label>项目名称 *</label>
+        <input name="project_name" required placeholder="例：某市政道路改造工程施工招标">
+      </div>
+      <div>
+        <label>项目所在地省</label>
+        <select name="province">
+          <option value="">不限</option>
+          <option value="四川">四川</option>
+          <option value="广东">广东</option>
+        </select>
+      </div>
+      <div>
+        <label>行业</label>
+        <select name="industry">
+          <option value="">不限</option>
+          <option value="建筑">建筑工程</option>
+        </select>
+      </div>
+      <div>
+        <label>招标人/采购人所属集团</label>
+        <select name="owner_group">
+          <option value="">无</option>
+          <option value="powerchina">中国电建</option>
+        </select>
+      </div>
+      <div>
+        <label>核查基准日</label>
+        <input name="base_date" type="date" value="{{ today }}">
+      </div>
+      <div>
+        <label>“近几年”范围（年）</label>
+        <input name="years_back" type="number" value="3" min="1" max="10">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>投标人</h2>
+    <div class="grid">
+      <div>
+        <label>企业名称 *</label>
+        <input name="company_name" required placeholder="例：四川众鑫恒辰建筑工程有限公司">
+      </div>
+      <div>
+        <label>统一社会信用代码</label>
+        <input name="uscc" placeholder="91510112MACD5CDJ9F">
+      </div>
+      <div>
+        <label>企业注册地省</label>
+        <select name="registered_province">
+          <option value="">不限</option>
+          <option value="四川">四川</option>
+          <option value="广东">广东</option>
+        </select>
+      </div>
+      <div>
+        <label>演示场景（当前为 mock 数据源，真实官方源 P3 接入）</label>
+        <select name="scenario">
+          <option value="clean">无异常记录</option>
+          <option value="bid_ban">省级限制投标且有效期内（条款1 FAIL）</option>
+          <option value="bid_ban_expired">限制投标已解除（仅提示）</option>
+          <option value="revoked">当前吊销营业执照（条款2 FAIL）</option>
+          <option value="bankruptcy">已宣告破产（条款3 FAIL）</option>
+          <option value="owner_ban">中国电建集团禁入（条款4 FAIL）</option>
+          <option value="license_surface_expired">安许表面过期但官方已延期（WARNING）</option>
+          <option value="query_error">数据源查询失败（ERROR 不算 PASS）</option>
+        </select>
+      </div>
+    </div>
+    <button type="submit">开始核查</button>
+  </div>
+</form>
+{% endblock %}

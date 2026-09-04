@@ -1,0 +1,168 @@
+"""本地 Web UI 服务器：项目创建 → 企业录入 → mock 核查 → 结果与证据入口。
+
+仅监听 127.0.0.1。数据库路径可用环境变量 BQC_DB 覆盖（默认 仓库/data/bqc.sqlite3）。
+"""
+from __future__ import annotations
+
+import os
+from datetime import date
+from pathlib import Path
+
+from fastapi import FastAPI, Form, HTTPException
+from fastapi.responses import RedirectResponse
+from fastapi.templating import Jinja2Templates
+from starlette.requests import Request
+
+from .. import __version__
+from ..core.db import connect, init_db
+from ..core.runner import REPO_ROOT, run_check
+from ..core.status import Status, report_label
+
+DB_PATH = Path(os.environ.get("BQC_DB") or (REPO_ROOT / "data" / "bqc.sqlite3"))
+init_db(DB_PATH)
+
+TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+BADGE = {
+    Status.FAIL.value: "badge-fail",
+    Status.WARNING.value: "badge-warn",
+    Status.MANUAL.value: "badge-warn",
+    Status.UNKNOWN.value: "badge-warn",
+    Status.ERROR.value: "badge-err",
+    Status.TIMEOUT.value: "badge-err",
+    Status.BLOCKED.value: "badge-err",
+    Status.NO_DATA.value: "badge-muted",
+    Status.PASS.value: "badge-ok",
+}
+
+app = FastAPI(title="投标人资格智能核查系统", version=__version__)
+
+
+@app.get("/")
+def index(request: Request):
+    return TEMPLATES.TemplateResponse(
+        request, "index.html",
+        {"today": date.today().isoformat(), "version": __version__},
+    )
+
+
+@app.post("/projects")
+def create_and_run(
+    project_name: str = Form(...),
+    province: str = Form(""),
+    industry: str = Form(""),
+    owner_group: str = Form(""),
+    base_date: str = Form(""),
+    years_back: int = Form(3),
+    company_name: str = Form(...),
+    uscc: str = Form(""),
+    registered_province: str = Form(""),
+    scenario: str = Form("clean"),
+):
+    if not base_date:
+        base_date = date.today().isoformat()
+    try:
+        base = date.fromisoformat(base_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="核查基准日格式应为 YYYY-MM-DD")
+
+    conn = connect(DB_PATH)
+    try:
+        cur = conn.execute(
+            "INSERT INTO projects (name, province, industry, owner_group, base_date, years_back, terms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (project_name, province or None, industry or None, owner_group or None,
+             base.isoformat(), years_back, "条款1,条款2,条款3,条款4,§6"),
+        )
+        project_id = cur.lastrowid
+        company_id = None
+        if uscc:
+            row = conn.execute(
+                "SELECT id FROM companies WHERE uscc = ?", (uscc,)
+            ).fetchone()
+            company_id = row[0] if row else None
+        if company_id is None:
+            cur = conn.execute(
+                "INSERT INTO companies (name, uscc, registered_province) VALUES (?, ?, ?)",
+                (company_name, uscc or None, registered_province or None),
+            )
+            company_id = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO project_companies (project_id, company_id, status) "
+            "VALUES (?, ?, 'running')",
+            (project_id, company_id),
+        )
+        pc_id = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    run_check(DB_PATH, pc_id, scenario=scenario)
+    return RedirectResponse(f"/checks/{pc_id}", status_code=303)
+
+
+def _load_result(pc_id: int):
+    conn = connect(DB_PATH)
+    conn.row_factory = __import__("sqlite3").Row
+    try:
+        pc = conn.execute(
+            "SELECT project_id, company_id, overall_status, status FROM project_companies WHERE id = ?",
+            (pc_id,),
+        ).fetchone()
+        if pc is None:
+            return None
+        project = conn.execute(
+            "SELECT name, province, industry, owner_group, base_date FROM projects WHERE id = ?",
+            (pc["project_id"],),
+        ).fetchone()
+        company = conn.execute(
+            "SELECT name, uscc, registered_province FROM companies WHERE id = ?",
+            (pc["company_id"],),
+        ).fetchone()
+        rules = [
+            dict(r) for r in conn.execute(
+                "SELECT rule_id, status, reasons_json FROM rule_results "
+                "WHERE project_id = ? AND company_id = ? ORDER BY id",
+                (pc["project_id"], pc["company_id"]),
+            ).fetchall()
+        ]
+        queries = [
+            dict(q) for q in conn.execute(
+                "SELECT source_id, status, queried_at, query_url FROM source_queries "
+                "WHERE project_id = ? AND company_id = ? ORDER BY id",
+                (pc["project_id"], pc["company_id"]),
+            ).fetchall()
+        ]
+        import json
+        for r in rules:
+            r["reasons"] = json.loads(r.pop("reasons_json") or "[]")
+        return {"pc": dict(pc), "project": dict(project), "company": dict(company),
+                "rules": rules, "queries": queries}
+    finally:
+        conn.close()
+
+
+@app.get("/checks/{pc_id}")
+def result(request: Request, pc_id: int):
+    data = _load_result(pc_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="核查记录不存在")
+    import json
+    for r in data["rules"]:
+        r["badge"] = BADGE.get(r["status"], "badge-muted")
+        r["label"] = report_label(Status(r["status"]))
+    overall = data["pc"].get("overall_status")
+    return TEMPLATES.TemplateResponse(
+        request, "result.html",
+        {
+            "d": data, "overall": overall,
+            "overall_label": report_label(Status(overall)) if overall else "待核查",
+            "overall_badge": BADGE.get(overall, "badge-muted"),
+            "version": __version__,
+        },
+    )
+
+
+@app.post("/checks/{pc_id}/run")
+def rerun(pc_id: int, scenario: str = Form("clean")):
+    run_check(DB_PATH, pc_id, scenario=scenario)
+    return RedirectResponse(f"/checks/{pc_id}", status_code=303)

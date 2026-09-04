@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}投标人资格智能核查系统{% endblock %}</title>
+<style>
+  :root { --line:#d9dee5; --ink:#1c2733; --muted:#66788c; }
+  * { box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", system-ui, sans-serif; margin: 0; color: var(--ink); background:#f4f6f9; }
+  header { background:#12365e; color:#fff; padding:14px 24px; display:flex; justify-content:space-between; align-items:center; }
+  header .sub { color:#bcd2ea; font-size:13px; margin-left:12px; }
+  main { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:20px 24px; margin-bottom:20px; }
+  h2 { font-size:17px; margin:0 0 14px; border-left:4px solid #2f6fb2; padding-left:10px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  input, select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:14px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 18px; }
+  button { margin-top:18px; background:#2f6fb2; color:#fff; border:0; border-radius:6px; padding:10px 26px; font-size:15px; cursor:pointer; }
+  button:hover { background:#275d97; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { border-bottom:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; background:#f8fafc; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:13px; color:#fff; }
+  .badge-fail { background:#c0392b; } .badge-warn { background:#e67e22; }
+  .badge-err { background:#7f8c8d; } .badge-muted { background:#95a5a6; } .badge-ok { background:#27ae60; }
+  .overall { font-size:16px; padding:12px 16px; border-radius:8px; background:#f8fafc; border:1px dashed var(--line); }
+  ul.reasons { margin:6px 0 0; padding-left:18px; color:#41526b; font-size:13px; }
+  footer { text-align:center; color:var(--muted); font-size:12px; padding:20px; }
+</style>
+</head>
+<body>
+<header>
+  <div>投标人资格智能核查系统<span class="sub">资格前审 · 证据链 · v{{ version }}</span></div>
+  <div style="font-size:12px;color:#bcd2ea;">仅本机运行 · 官方公开数据 · 结论需人工复核</div>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer>未查到 ≠ 确认不存在 · 查询失败/超时/待人工 永不显示为“正常”</footer>
+</body>
+</html>

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}核查结果 · {{ d.company.name }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>核查汇总</h2>
+  <table>
+    <tr><th style="width:120px">企业</th><td>{{ d.company.name }}{% if d.company.uscc %}（{{ d.company.uscc }}）{% endif %}</td></tr>
+    <tr><th>项目</th><td>{{ d.project.name }}{% if d.project.province %} · {{ d.project.province }}{% endif %}{% if d.project.owner_group %} · 集团:{{ d.project.owner_group }}{% endif %} · 基准日 {{ d.project.base_date }}</td></tr>
+    <tr><th>总体结论</th><td><span class="badge {{ overall_badge }}">{{ overall or "待核查" }} · {{ overall_label }}</span></td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>条款核查结果</h2>
+  <table>
+    <tr><th style="width:60px">状态</th><th style="width:280px">条款</th><th>判定依据</th></tr>
+    {% for r in d.rules %}
+    <tr>
+      <td><span class="badge {{ r.badge }}">{{ r.status }}</span><div style="font-size:12px;color:#66788c;margin-top:4px;">{{ r.label }}</div></td>
+      <td>{{ r.rule_id }}</td>
+      <td><ul class="reasons">{% for x in r.reasons %}<li>{{ x }}</li>{% endfor %}</ul></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>数据源查询日志</h2>
+  <table>
+    <tr><th>数据源</th><th style="width:100px">查询状态</th><th style="width:170px">查询时间</th><th>入口</th></tr>
+    {% for q in d.queries %}
+    <tr>
+      <td>{{ q.source_id }}</td>
+      <td>{{ q.status }}</td>
+      <td>{{ q.queried_at }}</td>
+      <td style="font-size:12px;color:#66788c;">{{ q.query_url or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p style="font-size:12px;color:#66788c;">证据文件（截图/HTML/SHA-256）将在 P6 证据系统接入后在此回链。</p>
+</div>
+
+<div class="card">
+  <h2>重新核查（换演示场景）</h2>
+  <form method="post" action="/checks/{{ d.pc.id }}/run">
+    <select name="scenario">
+      {% for key, label in [
+        ("clean","无异常记录"),("bid_ban","省级限制投标（FAIL）"),("bid_ban_expired","限制投标已解除"),
+        ("revoked","吊销营业执照（FAIL）"),("bankruptcy","破产（FAIL）"),
+        ("owner_ban","集团禁入（FAIL）"),("license_surface_expired","安许表面过期（WARNING）"),
+        ("query_error","查询失败（ERROR）")] %}
+      <option value="{{ key }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">重新核查</button>
+  </form>
+</div>
+{% endblock %}
