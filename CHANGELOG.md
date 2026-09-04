@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-09-05（P0.5 可靠性闭环 + 真实业务样本回放）
+
+### Fixed
+- **状态合并闭环（§三）**：旧单一严重度表 WARNING 盖过 MANUAL/BLOCKED/TIMEOUT/ERROR，
+  "风险提示"会掩盖数据异常与人工复核要求。改为决策层/数据层分层合并
+  （combine_decision/combine_data/overall），数据层 NEVER_PASS 优先于 WARNING/PASS/NO_DATA；
+  FAIL 抢占展示位时数据异常与人工要求经 data_status/manual_required 保留
+- **默认 HTTP 传输层闭环（§四）**：httpx 原生异常此前无人接（单源网络异常炸整轮核查），
+  现 TimeoutException→TIMEOUT、RequestError→ERROR；403/418/429/503→BLOCKED 统一口径；
+  DNS 复检 UnsafeUrlError→BLOCKED；runner 逐源 try/except 单源异常记 ERROR 带追溯不中断；
+  httpx 进运行时依赖
+- **Project.terms 真正控制规则（§八）**：rules.yaml 挂结构化 clause+scope，
+  未启用条款落 NOT_APPLICABLE 显式留痕；background（§6）恒评估但绝不单独否决项目资格
+
+### Added
+- **核查批次 run_id（§五）**：check_runs 表每次运行唯一 run_id，source_queries/
+  rule_results 绑定批次，findings 经 query 可溯；Web 只展示最新一次完整运行；
+  0.3.x 旧库幂等迁移补列，历史行 run_id=NULL 原样保留，绝不静默删除
+- **主体一致性进入真实链路（§六）**：matching.check_subject 七条规则（同名不同码≠同一
+  主体、缺码不自动认定、模糊相似不认定）；源记录形成 Finding 前强制判定，可追溯字段
+  （requested_*/source_subject_*/matched_by/match_result）随 attrs 留痕；
+  DIFFERENT 剔除并留痕，UNCONFIRMED 绝不进业务条款、由兜底条款转人工
+- **行业路由门控（§七）**：限定行业的数据源只对适用行业查询；不适用源落
+  NOT_APPLICABLE（含原因）——≠"查询无数据"，不参与数据层合并，不硬查
+- **SSRF 重定向逐跳校验（§九）**：默认传输禁用自动重定向，显式逐跳跟随（≤5 跳），
+  每跳完整 URL 校验+DNS 复检；公网入口借 302 跳内网/环回/歧义 IP 字面量全被拦
+- scripts/replay_samples.py 真实样本回放 harness；run_check 增 app_yaml 显式覆盖参数
+  （白天人工复核场景，覆盖必须明示留痕）
+
+### 真实样本回放结论（详细见仓库外本地记录）
+- 样本 16 家（A/B/C/D/E 类，来源：局域网共享盘招标台账/履约评价汇总/资格审查 PDF），
+  程序端到端 16/16 = MANUAL 待人工核查（6 源×16=96 次查询全 MANUAL——query_url
+  未人工复核的红线行为），未伪造任何 PASS/NO_DATA 结论
+- 官方三站（信用中国/建筑市场监管平台/gsxt）实测均拒绝非浏览器访问
+  （40001 反自动化/加密响应/521 WAF）——程序的 MANUAL 预判与真实可自动化能力一致
+- 差异根因：数据源覆盖不足（D）与反自动化（F）为主；新增 A/B/C 类缺陷 0 项；
+  发现台账时效问题 3 例（C 类）与台账无 USCC 列（G 类，资料实情）
+
+### 测试
+- 108 → 194 项全绿（新增状态合并/传输映射/批次隔离/主体匹配/行业门控/terms 控制/
+  SSRF 重定向共 7 个专项测试文件）
+
 ## [0.3.0] - 2026-09-04（P3 全国数据源 adapter 骨架 + P0 仓库基线修复）
 
 ### Fixed（P0 基线修复）

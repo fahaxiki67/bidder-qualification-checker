@@ -117,6 +117,21 @@ def test_real_sources_refused_under_nightly_mock_only(env, monkeypatch):
         run_check(db, pcid, real_sources=True, get=lambda url, t: (200, "{}"))
 
 
+def test_real_sources_app_yaml_explicit_override(env, monkeypatch):
+    """app_yaml 显式覆盖：白天人工复核场景可越过全局夜间门控，但必须明示传入。"""
+    db, pcid = env
+    app_yaml = Path(runner.APP_YAML).parent / "app.yaml"
+    app_yaml.write_text("nightly_mock_only: true\n", encoding="utf-8")  # 全局=禁
+    override = Path(runner.APP_YAML).parent / "app_daytime.yaml"
+    override.write_text("nightly_mock_only: false\n", encoding="utf-8")
+    # 不传 override → 拒绝；显式传白天配置 → 放行
+    with pytest.raises(RuntimeError, match="nightly_mock_only"):
+        run_check(db, pcid, real_sources=True, get=lambda url, t: (200, "{}"))
+    overall = run_check(db, pcid, real_sources=True, get=lambda url, t: (200, "{}"),
+                        app_yaml=override)
+    assert overall == "MANUAL"  # query_url 未复核 → 全源 MANUAL，红线语义不变
+
+
 def test_mock_query_error_overall_is_error(env):
     """修复：查询失败演示场景总体结论=ERROR，不再是 NO_DATA（红线：失败≠无异常）。"""
     db, pcid = env

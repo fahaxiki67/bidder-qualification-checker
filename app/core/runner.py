@@ -62,12 +62,14 @@ def _load_check_target(conn: sqlite3.Connection, pc_id: int):
 
 
 def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
-              real_sources: bool = False, get=None) -> str:
+              real_sources: bool = False, get=None,
+              app_yaml: str | Path | None = None) -> str:
     """对一条 project_companies 记录跑完整核查链，返回总体结论（Status 值）。
 
     real_sources=False：mock 演示链路（夜间默认）；
     real_sources=True：按注册表逐源调用真实 adapter（get 可注入用于测试；
-    nightly_mock_only=true 时拒绝执行）。query_url 未复核的源返回 MANUAL。
+    nightly_mock_only=true 时拒绝执行，app_yaml 可显式传入另一份配置用于
+    白天人工复核场景——覆盖必须由调用方明示并留痕）。query_url 未复核的源返回 MANUAL。
     """
     conn = connect(db_path)
     run_id = uuid.uuid4().hex  # 核查批次隔离（P0.5 §五）：每次运行唯一，历史不混入
@@ -98,7 +100,7 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
         per_source: dict[str, list[Finding]] = {}
         notes: dict[str, str] = {}
         if real_sources:
-            if _nightly_mock_only():
+            if _nightly_mock_only(Path(app_yaml) if app_yaml else None):
                 raise RuntimeError(
                     "nightly_mock_only=true：夜间/演示模式禁用真实数据源查询（任务书 §18）")
             for e in sources:
