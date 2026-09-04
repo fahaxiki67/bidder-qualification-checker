@@ -249,7 +249,12 @@ class NationalAdapter:
 
     def query(self, company: Company, source: SourceRef, *, get=None, timeout: float = 15.0) -> AdapterOutcome:
         url = source.query_url
-        # 模式注记优先于"URL 未复核"：manual_intake/验证码源即使补了 URL 也不可自动查询
+        # 模式注记优先于"URL 未复核"：manual/验证码/manual_intake 源即使补了 URL 也不可自动查询
+        if source.automation_mode == "manual":
+            return AdapterOutcome(
+                self.source_id, Status.MANUAL, [], url or source.official_home,
+                note="人工核查模式（manual）：由人工查询官方渠道并录入证据，机器不自动访问",
+            )
         if source.automation_mode in ("auto_fill_manual_verify", "manual_intake"):
             return AdapterOutcome(
                 self.source_id, Status.MANUAL, [], url or source.official_home,

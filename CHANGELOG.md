@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-09-05（P5 地区插件机制：四川 + 广东）
+
+### Added
+- 地区插件层 `app/sources/regions/`：四川插件（sc_construction 建筑市场监管
+  资质/安许/诚信 + sc_credit 信用四川薄封装）与广东插件（gd_construction，
+  复用全国 jzsc 契约）——新增省插件不改任何核心代码，仅插件包+注册表条目
+- base 传输层新增 `manual` 模式注记：人工核查模式查询恒 MANUAL（附说明文案）
+- docs/PLUGINS.md 地区插件开发说明：机制/契约/automation_mode 口径/红线/最小步骤
+
+### 测试
+- 204 → 214 项全绿（新增 tests/test_region_plugins.py 10 项，含红线锁定测试：
+  ast 扫描核心代码——省名只允许出现在注释/文档示例，字符串常量与标识符零容忍）
+
 ## [0.5.0] - 2026-09-05（P4 集团数据源：中国电建禁入供应商 adapter）
 
 ### Added

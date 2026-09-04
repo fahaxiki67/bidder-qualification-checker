@@ -88,6 +88,19 @@ sources:
     adapter: app.sources.regions.sichuan.construction
     notes: 四川首个地区插件（P5）；URL 复核待办
 
+  - id: sc_credit
+    name: 信用中国（四川）
+    level: province
+    province: 四川
+    authority: 四川省发展和改革委员会
+    source_type: 省级处罚/失信
+    official_home: null            # 待人工复核后填入，复核前不启用真实查询
+    automation_mode: manual
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.regions.sichuan.credit
+    notes: 四川插件第二源；抽取契约复用全国信用中国
+
   - id: gd_construction
     name: 广东省建筑市场监管平台
     level: province
