@@ -20,7 +20,7 @@ from .models import Company, Finding, Project
 from .registry import SourceRegistry
 from .router import plan
 from .rules import RuleEngine
-from .status import NEVER_PASS, Status, combine
+from .status import Status, combine_data, combine_decision, needs_manual, overall as overall_status
 
 # 配置随包分发（app/config/ 进入 wheel），源码运行与安装运行读到同一份
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -103,7 +103,6 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
         engine = RuleEngine()
         all_findings = [f for lst in per_source.values() for f in lst]
         results = engine.run_all(all_findings, project, company)
-
         for e in sources:
             st = source_status[e.id]
             fnd = per_source.get(e.id, [])
@@ -135,10 +134,10 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                 (proj["id"], comp["id"], r.rule_id, r.status,
                  json.dumps(r.reasons, ensure_ascii=False)),
             )
-        overall = engine.overall(results)
-        failed = [s for s in source_status.values() if s in NEVER_PASS]
-        if failed:
-            overall = combine([Status(overall), *failed]).value
+        # 业务判断与数据获取分层合并：数据异常/人工复核绝不被 WARNING/PASS 掩盖（P0.5 §三）
+        decision = combine_decision(r.status for r in results)
+        data = combine_data(source_status.values())
+        overall = overall_status(decision, data).value
         conn.execute(
             "UPDATE project_companies SET overall_status = ?, status = 'done' WHERE id = ?",
             (overall, pc_id),

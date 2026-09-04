@@ -2,6 +2,15 @@
 
 强制规则：ERROR / TIMEOUT / BLOCKED / MANUAL / UNKNOWN 永远不得自动算作 PASS；
 "没有查到"（NO_DATA）与"确认不存在"必须分开。
+
+两层状态（P0.5 §三）：业务判断与数据获取分开合并。
+此前单一严重度表把 WARNING 排在 MANUAL/BLOCKED/TIMEOUT/ERROR 之前，
+导致"风险提示"掩盖数据异常与人工复核要求——已修正：
+
+- 决策层（规则评判）：FAIL > MANUAL > WARNING > PASS
+- 数据层（数据源查询）：MANUAL > BLOCKED > TIMEOUT > ERROR > UNKNOWN > NO_DATA > PASS
+- 展示层 overall(decision, data)：FAIL/MANUAL 决策优先展示，数据层 NEVER_PASS
+  状态优先于 WARNING/PASS/NO_DATA 展示；决策 FAIL 时数据异常经 data_status 保留。
 """
 from __future__ import annotations
 
@@ -25,10 +34,20 @@ NEVER_PASS: frozenset[Status] = frozenset(
     {Status.ERROR, Status.TIMEOUT, Status.BLOCKED, Status.MANUAL, Status.UNKNOWN}
 )
 
-#: 严重度排序（index 越小越严重），combine 据此取最严重者
-_SEVERITY_ORDER: tuple[Status, ...] = (
+#: 决策层（规则评判）严重度：index 越小越严重。
+#: 规则可产出 UNKNOWN（C/D 级线索不足以 FAIL）与 NO_DATA（未检索到该类记录），
+#: 二者属于决策信息，排在 WARNING 之后、PASS 之前。
+_DECISION_ORDER: tuple[Status, ...] = (
     Status.FAIL,
+    Status.MANUAL,
     Status.WARNING,
+    Status.UNKNOWN,
+    Status.NO_DATA,
+    Status.PASS,
+)
+
+#: 数据获取层严重度：人工复核/访问受限/超时/失败绝不被业务提示或"无记录"掩盖
+_DATA_ORDER: tuple[Status, ...] = (
     Status.MANUAL,
     Status.BLOCKED,
     Status.TIMEOUT,
@@ -38,13 +57,79 @@ _SEVERITY_ORDER: tuple[Status, ...] = (
     Status.PASS,
 )
 
+_DECISION_SET = frozenset(_DECISION_ORDER)
+_DATA_SET = frozenset(_DATA_ORDER)
 
-def combine(statuses) -> Status:
-    """汇合多个状态，返回最严重者。空输入返回 NO_DATA（查过但没有可得结论）。"""
+
+def combine_decision(statuses) -> Status:
+    """合并规则评判状态（FAIL/MANUAL/WARNING/UNKNOWN/NO_DATA/PASS）。
+
+    空输入 = 规则未检索到任何相关记录 → NO_DATA（"没有查到"不得显示为"正常"）。
+    """
     sts = [Status(s) for s in statuses]
     if not sts:
         return Status.NO_DATA
-    return min(sts, key=_SEVERITY_ORDER.index)
+    return min(sts, key=_DECISION_ORDER.index)
+
+
+def combine_data(statuses) -> Status:
+    """合并数据源查询状态。任一 NEVER_PASS 状态绝不被 PASS/NO_DATA/WARNING 掩盖。"""
+    sts = [Status(s) for s in statuses]
+    if not sts:
+        return Status.NO_DATA
+    return min(sts, key=_DATA_ORDER.index)
+
+
+def overall(decision: Status, data: Status) -> Status:
+    """展示层单一结论。
+
+    - FAIL / MANUAL 决策优先展示（数据异常经 data_status 单独保留，不丢失）；
+    - 数据层 NEVER_PASS 状态优先于 WARNING/PASS/NO_DATA 展示：
+      要求人工复核的最终结果不得仅显示 WARNING/NO_DATA/PASS；
+      数据获取失败不得因另一条 WARNING 而丢失。
+    """
+    decision = Status(decision)
+    data = Status(data)
+    if decision == Status.FAIL:
+        return Status.FAIL
+    if decision == Status.MANUAL:
+        return Status.MANUAL
+    if data in NEVER_PASS:
+        return data
+    if decision == Status.WARNING:
+        return Status.WARNING
+    if decision == Status.UNKNOWN:
+        return Status.UNKNOWN
+    if decision == Status.NO_DATA or data == Status.NO_DATA:
+        return Status.NO_DATA
+    return Status.PASS
+
+
+def needs_manual(decision_statuses, data_statuses) -> bool:
+    """人工复核要求：任一规则或任一数据源明确要求人工 → True。
+
+    该标记独立于展示层状态保存，确保 FAIL+MANUAL 等组合下
+    "仍需人工复核"的信息不因 FAIL 抢占展示位而丢失。
+    """
+    return any(Status(s) == Status.MANUAL for s in list(decision_statuses) + list(data_statuses))
+
+
+def combine(statuses) -> Status:
+    """兼容旧签名：任意状态列表的保守合并。
+
+    语义 = 决策层与数据层各自归位后取 overall；
+    仅决策层输入 → 决策层结论；仅数据层输入 → 数据层结论。
+    """
+    sts = [Status(s) for s in statuses]
+    if not sts:
+        return Status.NO_DATA
+    decisions = [s for s in sts if s in _DECISION_SET]
+    datas = [s for s in sts if s not in _DECISION_SET]
+    if not datas:
+        return combine_decision(decisions)
+    if not decisions:
+        return combine_data(datas)
+    return overall(combine_decision(decisions), combine_data(datas))
 
 
 def report_label(status: Status) -> str:

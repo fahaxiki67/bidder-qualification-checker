@@ -18,8 +18,10 @@ def test_never_pass_states_survive_combine(s):
 
 
 def test_combine_ordering():
+    # 旧断言 combine([WARNING, ERROR]) is WARNING 掩盖数据失败，系缺陷行为，
+    # 已按 P0.5 §三 修正（详见 tests/test_status_merge.py）
     assert combine([Status.FAIL, Status.WARNING]) is Status.FAIL
-    assert combine([Status.WARNING, Status.ERROR]) is Status.WARNING
+    assert combine([Status.WARNING, Status.ERROR]) is Status.ERROR
     assert combine([Status.NO_DATA, Status.PASS]) is Status.NO_DATA
     assert combine([Status.PASS]) is Status.PASS
 

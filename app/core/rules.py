@@ -12,7 +12,7 @@ from datetime import date
 
 from .evidence import can_support_fail
 from .models import Company, Finding, Project, RuleResult
-from .status import Status, combine
+from .status import Status, combine_decision
 
 
 def effective_on(start: date | None, end: date | None, base: date) -> bool:
@@ -32,7 +32,7 @@ def _done(rule_id: str, title: str, statuses, reasons, company) -> RuleResult:
     return RuleResult(
         rule_id=rule_id,
         title=title,
-        status=combine(statuses).value,
+        status=combine_decision(statuses).value,
         reasons=reasons,
         company=company.name if company else None,
     )
@@ -229,4 +229,4 @@ class RuleEngine:
     @staticmethod
     def overall(results) -> str:
         """全部条款的最严重结论。任一 ERROR/TIMEOUT/BLOCKED/MANUAL/UNKNOWN 都不会被吞成 PASS。"""
-        return combine([r.status for r in results]).value
+        return combine_decision([r.status for r in results]).value
