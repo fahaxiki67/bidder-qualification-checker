@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.15.0] - 2026-09-05（文档一致性收口：README 版本漂移修复+测试锁死）
+
+### Fixed
+- README 状态行版本漂移（停在 v0.12.0，实际 0.14.0）——即 P0 任务书 §六点名的
+  漂移问题类；已修正并新增回归测试：README"状态：vX.Y.Z"必须与 app.__version__
+  一致（0.12.0→0.14.0 期间漂移两个版本未被发现，本轮测试永久锁死）
+
+### 测试
+- 238 → 239 项全绿
+
 ## [0.14.0] - 2026-09-05（验收准备：UAT 手册 + 联调工具离线实测）
 
 ### Added
