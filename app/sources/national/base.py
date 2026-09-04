@@ -105,16 +105,52 @@ class FetchResult:
     note: str = ""
 
 
-def httpx_get(url: str, timeout: float = 15.0) -> tuple[int, str]:
-    """默认传输层（仅真实联调使用）：政府网站直连不走代理；请求前复检 DNS。"""
+def _translate_httpx_error(e: Exception) -> TransportError:
+    """httpx 异常 → 传输层状态异常（P0.5 §四）。
+
+    - TimeoutException 家族（连接/读/写/池超时）→ TransportTimeout；
+    - 其余 RequestError（DNS/连接失败等）→ TransportError；
+    - 非网络异常（编程错误）原样抛出，不得吞掉。
+    """
+    import httpx
+
+    if isinstance(e, httpx.TimeoutException):
+        return TransportTimeout(str(e) or "请求超时")
+    if isinstance(e, httpx.RequestError):
+        return TransportError(f"{e.__class__.__name__}: {e}")
+    raise e
+
+
+def _default_resolver(host: str) -> list[str]:
+    """真实 DNS 解析（传输层复检用）。测试经 resolver 参数注入假解析。"""
+    return sorted({ai[4][0] for ai in socket.getaddrinfo(host, None)})
+
+
+def httpx_get(url: str, timeout: float = 15.0, *, client_factory=None, resolver=None) -> tuple[int, str]:
+    """默认传输层（仅真实联调使用）：政府网站直连不走代理；请求前复检 DNS。
+
+    client_factory/resolver 供测试注入（httpx.MockTransport / 假 DNS），
+    覆盖的是与生产完全相同的默认调用链，而非绕过它。
+    httpx 网络异常在此统一翻译为 TransportError 家族，fetch() 才能映射状态。
+    """
     import httpx
 
     host = (urlparse(url).hostname or "").rstrip(".")
-    addrs = sorted({ai[4][0] for ai in socket.getaddrinfo(host, None)})
+    resolve = resolver or _default_resolver
+    try:
+        addrs = resolve(host)
+    except OSError as e:
+        raise TransportError(f"DNS 解析失败：{host}: {e}") from e
     assert_safe_url(url, resolved_ips=addrs)
-    with httpx.Client(timeout=timeout, follow_redirects=True, trust_env=False) as cli:
-        resp = cli.get(url)
-        return resp.status_code, resp.text
+    factory = client_factory or (lambda: httpx.Client(timeout=timeout, trust_env=False))
+    try:
+        with factory() as cli:
+            resp = cli.get(url)
+            return resp.status_code, resp.text
+    except TransportError:
+        raise
+    except Exception as e:
+        raise _translate_httpx_error(e) from e
 
 
 def fetch(url: str, get=None, timeout: float = 15.0) -> FetchResult:
@@ -126,6 +162,9 @@ def fetch(url: str, get=None, timeout: float = 15.0) -> FetchResult:
         return FetchResult(Status.BLOCKED, None, "", url, note=f"SSRF 校验拦截：{e}")
     try:
         code, text = get(url, timeout)
+    except UnsafeUrlError as e:
+        # DNS 复检/重定向目标复检（httpx_get 内部）拦下的不安全地址：SSRF 防护拒绝
+        return FetchResult(Status.BLOCKED, None, "", url, note=f"SSRF 复检拦截：{e}")
     except TransportTimeout:
         return FetchResult(Status.TIMEOUT, None, "", url, note="请求超时")
     except TransportStatus as e:
@@ -137,7 +176,10 @@ def fetch(url: str, get=None, timeout: float = 15.0) -> FetchResult:
         return FetchResult(Status.ERROR, None, "", url, note=f"网络错误：{e}")
     if 200 <= code < 300:
         return FetchResult(Status.PASS, code, text, url)
-    return FetchResult(Status.ERROR, code, "", url, note=f"非 2xx 响应（HTTP {code}）")
+    if code in _RISK_HTTP_CODES:
+        # 默认路径不抛 TransportStatus，风控状态码在此同样映射 BLOCKED（P0.5 §四）
+        return FetchResult(Status.BLOCKED, code, "", url, note=f"访问被限制（HTTP {code}）")
+    return FetchResult(Status.ERROR, code, "", url, note=f"HTTP 错误 {code}")
 
 
 def parse_date(s) -> date | None:

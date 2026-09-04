@@ -84,7 +84,15 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                 raise RuntimeError(
                     "nightly_mock_only=true：夜间/演示模式禁用真实数据源查询（任务书 §18）")
             for e in sources:
-                out = query_source(e, company, get=get)
+                try:
+                    out = query_source(e, company, get=get)
+                except Exception as exc:
+                    # 单个数据源异常不得拖垮整个项目核查（P0.5 §四）；
+                    # 错误信息保留进 note 供追溯，状态=ERROR 绝不伪造成功
+                    source_status[e.id] = Status.ERROR
+                    per_source[e.id] = []
+                    notes[e.id] = f"数据源执行异常：{exc.__class__.__name__}: {exc}"
+                    continue
                 source_status[e.id] = Status(out.status.value)
                 per_source[e.id] = list(out.findings)
                 notes[e.id] = out.note
