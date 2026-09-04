@@ -1,0 +1,115 @@
+# 数据源注册表 —— 全部官方入口唯一登记处（任务书 §10）。
+# 纪律：任何 URL 在开发 adapter 前必须经当前官方门户人工复核，复核后才能填 last_verified；
+# 不得根据旧博客/旧项目/搜索摘要写死接口。
+sources:
+  - id: gsxt
+    name: 国家企业信用信息公示系统
+    level: national
+    authority: 国家市场监督管理总局
+    source_type: 工商登记
+    official_home: https://www.gsxt.gov.cn/
+    automation_mode: auto_fill_manual_verify   # 有验证码：自动导航+人工验证+继续解析
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.national.gsxt
+    notes: 有图片验证码；夜间开发只做骨架+mock，真机联调留给白天人工配合
+
+  - id: creditchina
+    name: 信用中国
+    level: national
+    authority: 国家发展改革委
+    source_type: 行政处罚/失信记录
+    official_home: https://www.creditchina.gov.cn/
+    automation_mode: auto
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.national.creditchina
+    notes: 待开发（P3）；开发前复核 URL
+
+  - id: zxgk
+    name: 中国执行信息公开网
+    level: national
+    authority: 最高人民法院
+    source_type: 被执行人/失信被执行人
+    official_home: https://zxgk.court.gov.cn/
+    automation_mode: auto_fill_manual_verify
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.national.zxgk
+    notes: 待开发（P3）
+
+  - id: mem_safety_credit
+    name: 应急管理部安全生产信用查询
+    level: national
+    authority: 应急管理部
+    source_type: 安全生产失信/处罚
+    official_home: https://www.mem.gov.cn/
+    automation_mode: auto
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.national.mem
+    notes: 待开发（P3）；查询子路径需复核
+
+  - id: jzsc
+    name: 全国建筑市场监管公共服务平台
+    level: national
+    authority: 住房和城乡建设部
+    source_type: 建筑企业资质/人员
+    official_home: https://jzsc.mohurd.gov.cn/
+    automation_mode: auto
+    evidence_grade: A
+    enabled: true
+    industry: 建筑
+    adapter: app.sources.national.jzsc
+    notes: 建筑企业适用；待开发（P3）
+
+  - id: pcczdc
+    name: 全国企业破产重整案件信息网
+    level: national
+    authority: 最高人民法院
+    source_type: 破产/清算公告
+    official_home: https://pccz.court.gov.cn/
+    automation_mode: auto
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.national.pcczdc
+    notes: 域名待人工复核后再启用真实查询
+
+  - id: sc_construction
+    name: 四川省建筑市场监管公共服务平台（含安许/资质）
+    level: province
+    province: 四川
+    authority: 四川省住房和城乡建设厅
+    source_type: 省级资质/安许/诚信
+    official_home: null            # 待人工复核后填入，复核前不启用真实查询
+    automation_mode: manual
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.regions.sichuan.construction
+    notes: 四川首个地区插件（P5）；URL 复核待办
+
+  - id: gd_construction
+    name: 广东省建筑市场监管平台
+    level: province
+    province: 广东
+    authority: 广东省住房和城乡建设厅
+    source_type: 省级资质/进粤登记/诚信
+    official_home: null            # 待人工复核后填入
+    automation_mode: manual
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.regions.guangdong.construction
+    notes: 第二地区插件，验证插件机制（P5）
+
+  - id: powerchina_ban
+    name: 中国电建禁入/受限供应商名单
+    level: owner
+    owner_group: powerchina
+    authority: 中国电力建设集团有限公司
+    source_type: 集团禁入名单
+    official_home: https://ec.powerchina.cn/
+    automation_mode: auto
+    evidence_grade: A
+    enabled: true
+    adapter: app.sources.owners.powerchina
+    notes: 股份公司/子企业/基层单位三级禁入；内部名单无法公开核验时必须返回待人工核查

@@ -1,0 +1,22 @@
+# 应用配置
+database: data/bqc.sqlite3
+
+# 同一政府网站同一时刻只查一个企业，禁止为速度高频并发（任务书 §17）
+per_site_concurrency: 1
+
+# 夜间无人值守时段只跑 mock/骨架，不持续访问真实政府网站（任务书 §18）
+nightly_mock_only: true
+
+# 遇验证码/滑块/登录：自动导航+自动填写+暂停+人工验证+继续解析（任务书 §9）
+human_in_the_loop: true
+forbidden:
+  - 破解验证码
+  - 绕过WAF
+  - 代理池
+  - 高频轰炸
+  - 伪造身份
+
+# SSRF 防护：adapter 发请求仅 http/https，校验 host，拒绝内网/保留地址
+ssrf:
+  allowed_schemes: [http, https]
+  deny_private_addresses: true

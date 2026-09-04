@@ -1,0 +1,22 @@
+# 资格审查条款注册（任务书 §5/§6 第一批）。具体项目的条款勾选存于 projects.terms。
+rules:
+  - id: rule_bid_restriction
+    title: 被省级以上行业主管部门限制投标/采购活动
+    clause: 条款1
+    fail_requires: authority_level>=province 且在有效期内 且 A/B 级证据
+  - id: rule_business_status
+    title: 当前处于停产停业或证照吊销/暂扣状态
+    clause: 条款2
+    fail_requires: 当前处于清单状态 且 A/B 级证据；历史已解除只提示
+  - id: rule_bankruptcy
+    title: 进入清算程序或被宣告破产
+    clause: 条款3
+    fail_requires: 当前有效状态；其他丧失履约能力一律 MANUAL
+  - id: rule_owner_ban
+    title: 招标人集团禁入/受限供应商
+    clause: 条款4
+    fail_requires: 属于本项目招标人集团 且在有效期内 且 A/B 级证据
+  - id: rule_license_validity
+    title: 安全生产许可证/建筑资质当前有效性
+    clause: 任务书§6
+    fail_requires: 主管部门当前状态为 过期/注销/吊销/暂扣；扫描件过期仅 WARNING；已延期不得判无证

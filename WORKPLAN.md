@@ -31,7 +31,7 @@
 
 | # | 阶段 | 内容 | 完成标准 | 状态 |
 |---|------|------|----------|------|
-| P1 | 架构骨架 | 目录结构、数据模型、9 态状态模型、SourceAdapter/SourceRouter/RuleEngine/SourceRegistry 抽象、SQLite 建表（§16 全部表）、pytest 骨架 | `pytest` 绿；`python -m app.main --help` 可运行 | ☐ |
+| P1 | 架构骨架 | 目录结构、数据模型、9 态状态模型、SourceAdapter/SourceRouter/RuleEngine/SourceRegistry 抽象、SQLite 建表（§16 全部表）、pytest 骨架 | `pytest` 绿；`python -m app.main --help` 可运行 | ☑ 09-04（47 测试全绿） |
 | P2 | 核心 Web UI | 本地 Web UI：项目创建、企业输入、地区/规则配置、核查任务页（FastAPI + 简单前端） | 浏览器可建项目、发起一次 mock 核查 | ☐ |
 | P3 | 全国数据源 | 逐个 adapter：信用中国、执行信息公开网、安全生产信用、建筑市场监管平台、gsxt（骨架） | 每个 adapter 有 fixture mock 测试；真实联调单列待办 | ☐ |
 | P4 | 集团数据源 | 中国电建禁入供应商 adapter（ec.powerchina.cn）+ "待人工核查"兜底 | mock 测试绿；无法公开验证的必须返回 MANUAL | ☐ |
