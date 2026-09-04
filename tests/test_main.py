@@ -2,6 +2,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import app
+
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -30,4 +32,4 @@ def test_cli_version():
         [sys.executable, "-m", "app.main", "--version"],
         cwd=REPO, capture_output=True, text=True,
     )
-    assert r.returncode == 0 and "0.1.0" in r.stdout
+    assert r.returncode == 0 and app.__version__ in r.stdout

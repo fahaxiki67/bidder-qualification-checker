@@ -1,6 +1,6 @@
 """本地 Web UI 服务器：项目创建 → 企业录入 → mock 核查 → 结果与证据入口。
 
-仅监听 127.0.0.1。数据库路径可用环境变量 BQC_DB 覆盖（默认 仓库/data/bqc.sqlite3）。
+仅监听 127.0.0.1。数据库路径可用环境变量 BQC_DB 覆盖（默认 当前工作目录/data/bqc.sqlite3）。
 """
 from __future__ import annotations
 
@@ -15,10 +15,12 @@ from starlette.requests import Request
 
 from .. import __version__
 from ..core.db import connect, init_db
-from ..core.runner import REPO_ROOT, run_check
+from ..core.runner import run_check
 from ..core.status import Status, report_label
 
-DB_PATH = Path(os.environ.get("BQC_DB") or (REPO_ROOT / "data" / "bqc.sqlite3"))
+# 数据库默认落在当前工作目录 data/（与 CLI init-db 默认一致），
+# 安装版不再往 site-packages 写数据。
+DB_PATH = Path(os.environ.get("BQC_DB") or Path("data/bqc.sqlite3"))
 init_db(DB_PATH)
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))

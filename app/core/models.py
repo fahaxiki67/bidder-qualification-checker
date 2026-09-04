@@ -42,7 +42,7 @@ class Project:
 
 @dataclass(frozen=True)
 class SourceRef:
-    """数据源注册表条目（config/sources_registry.yaml 的一行，任务书 §10）。"""
+    """数据源注册表条目（app/config/sources_registry.yaml 的一行，任务书 §10）。"""
 
     id: str
     name: str

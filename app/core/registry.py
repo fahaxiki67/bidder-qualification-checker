@@ -1,4 +1,4 @@
-"""数据源注册表：官方 URL 只进 config/sources_registry.yaml，禁止散落源码（任务书 §10）。"""
+"""数据源注册表：官方 URL 只进 app/config/sources_registry.yaml，禁止散落源码（任务书 §10）。"""
 from __future__ import annotations
 
 from pathlib import Path

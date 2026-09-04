@@ -2,15 +2,17 @@ from pathlib import Path
 
 import pytest
 
+import app
 from app.core.models import SourceRef
 from app.core.registry import SourceRegistry
 
-REPO = Path(__file__).resolve().parents[1]
+# 配置随包分发（app/config/），源码与安装环境读同一处
+PKG_ROOT = Path(app.__file__).resolve().parent
 
 
 @pytest.fixture(scope="module")
 def registry():
-    return SourceRegistry.from_yaml(REPO / "config" / "sources_registry.yaml")
+    return SourceRegistry.from_yaml(PKG_ROOT / "config" / "sources_registry.yaml")
 
 
 def test_yaml_loads_and_fields_complete(registry):

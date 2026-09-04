@@ -2,7 +2,7 @@
 
 SQL 一律单表参数化查询（? 占位符），避免复杂拼接（也是 Mimosa 门禁的偏好）。
 数据源失败状态（TIMEOUT/ERROR/BLOCKED/MANUAL）折算进总体结论，绝不归约为 PASS；
-真实链路受 config/app.yaml nightly_mock_only 门控（夜间/演示模式禁用真实查询）。
+真实链路受 app/config/app.yaml nightly_mock_only 门控（夜间/演示模式禁用真实查询）。
 """
 from __future__ import annotations
 
@@ -22,9 +22,10 @@ from .router import plan
 from .rules import RuleEngine
 from .status import NEVER_PASS, Status, combine
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-REGISTRY_YAML = REPO_ROOT / "config" / "sources_registry.yaml"
-APP_YAML = REPO_ROOT / "config" / "app.yaml"
+# 配置随包分发（app/config/ 进入 wheel），源码运行与安装运行读到同一份
+APP_ROOT = Path(__file__).resolve().parents[1]
+REGISTRY_YAML = APP_ROOT / "config" / "sources_registry.yaml"
+APP_YAML = APP_ROOT / "config" / "app.yaml"
 
 
 def _nightly_mock_only(path: Path | None = None) -> bool:

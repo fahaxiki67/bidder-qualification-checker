@@ -4,6 +4,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from .. import __version__
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,9 +112,6 @@ CREATE TABLE IF NOT EXISTS app_versions (
     version TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
-
-INSERT INTO app_versions (version) SELECT '0.1.0'
-WHERE NOT EXISTS (SELECT 1 FROM app_versions);
 """
 
 EXPECTED_TABLES = (
@@ -134,6 +133,12 @@ def init_db(path: str | Path) -> Path:
     conn = connect(path)
     try:
         conn.executescript(SCHEMA)
+        # 版本登记单点来源 app.__version__，避免库内硬编码与包版本漂移
+        conn.execute(
+            "INSERT INTO app_versions (version) SELECT ? "
+            "WHERE NOT EXISTS (SELECT 1 FROM app_versions)",
+            (__version__,),
+        )
         conn.commit()
     finally:
         conn.close()

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import app
 from app.core.models import Company, Project, SourceRef
 from app.core.registry import SourceRegistry
 from app.core.rules import RuleEngine
@@ -24,7 +25,7 @@ from app.sources.national.base import (
 )
 
 REGISTRY = SourceRegistry.from_yaml(
-    Path(__file__).resolve().parents[1] / "config" / "sources_registry.yaml")
+    Path(app.__file__).resolve().parent / "config" / "sources_registry.yaml")
 NATIONAL = REGISTRY.filter(level="national")
 COMPANY = Company(name="测试建筑有限公司", uscc="91510000TEST0000XX")
 PROJECT = Project(name="测试项目", base_date=date(2026, 9, 4))

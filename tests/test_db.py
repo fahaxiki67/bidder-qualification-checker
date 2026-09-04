@@ -1,3 +1,4 @@
+import app
 from app.core import db
 
 
@@ -26,5 +27,5 @@ def test_minimal_insert_roundtrip(tmp_path):
     )
     conn.commit()
     assert cur.execute("SELECT COUNT(*) FROM project_companies").fetchone()[0] == 1
-    assert cur.execute("SELECT version FROM app_versions").fetchone()[0] == "0.1.0"
+    assert cur.execute("SELECT version FROM app_versions").fetchone()[0] == app.__version__
     conn.close()

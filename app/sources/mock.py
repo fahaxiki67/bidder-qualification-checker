@@ -1,6 +1,6 @@
 """演示/测试用 mock 数据源：按场景返回预置事实。
 
-纪律：夜间无人值守只允许 mock（config/app.yaml nightly_mock_only）；
+纪律：夜间无人值守只允许 mock（app/config/app.yaml nightly_mock_only）；
 真实 adapter（P3 起）必须另行人工验证 URL 并在白天配合人工验证联调。
 """
 from __future__ import annotations

@@ -1,0 +1,6 @@
+# 确保配置与 Web 模板进入 sdist（wheel 侧由 pyproject package-data 保证，
+# python -m build 的 wheel 由 sdist 重建，两处必须同时覆盖）
+recursive-include app/config *.yaml
+recursive-include app/web/templates *.html
+recursive-include app *.py
+include README.md LICENSE
