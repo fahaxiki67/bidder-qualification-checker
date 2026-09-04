@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.0] - 2026-09-05（验收准备：UAT 手册 + 联调工具离线实测）
+
+### Added
+- docs/UAT.md 用户验收手册：Windows/macOS 便携包、Web 全链路、报告与证据的
+  逐步操作单（操作→预期→勾选），含常见问题（SmartScreen/Gatekeeper/端口占用）
+- P3R 复核工具 bqc check-source 离线端到端实测：夜间门控拒绝（退出码 2）、
+  白天覆盖放行、未知源拒绝、未复核源 MANUAL 如实输出——四条路径全部验证
+
+### 测试
+- 233 → 238 项全绿（含上一独立复核轮六项修复的回归）
+
 ## [0.13.0] - 2026-09-05（独立复核轮：六项 A 类缺陷修复）
 
 ### Fixed（全数附回归测试）
