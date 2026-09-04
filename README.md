@@ -4,8 +4,13 @@
 > 自动查询多个官方公开来源，把公开数据与本项目资格审查条款对应起来，
 > 形成可追溯的资格前审证据链，导出 Excel 核查表与 PDF 核查报告。
 
-**状态：开发中（WIP）。** 当前为仓库初始化骨架，按 `WORKPLAN.md` 分阶段推进，
-进度见 `docs/PROGRESS.md`。
+**状态：开发中（WIP，v0.3.0）。** 架构骨架（P1）、本地 Web UI（P2）、
+全国数据源 adapter 骨架（P3）已完成，仓库基线修复（P0：可靠安装/CI/打包）已完成；
+按 `WORKPLAN.md` 分阶段推进，进度见 `docs/PROGRESS.md`。
+
+**如实声明：全国官方平台的真实自动查询尚未完成。** 各源 `query_url` 须经人工复核后
+回填注册表，此前真实查询一律返回 MANUAL（待人工核查）；目前可运行的是 mock 演示链路。
+各平台逐项状态见 `docs/ACCEPTANCE.md`。
 
 ## 核心特性（规划）
 
@@ -20,28 +25,29 @@
 
 ```text
 app/
-├─ core/          # models / router / rules / evidence / tasks
+├─ core/          # models / router / rules / evidence / runner / db
 ├─ sources/
-│  ├─ national/   # 国家企业信用公示、信用中国、执行信息公开网…
-│  ├─ regions/    # sichuan/ guangdong/ …（地区插件，逐省添加）
-│  └─ owners/     # powerchina/ …（招标人集团禁入名单）
-├─ reports/       # Excel + PDF 生成
-├─ web/           # 本地 Web UI
-└─ main.py
-config/
-├─ sources_registry.yaml   # 数据源注册表（URL 一律在此登记，不散落源码）
-├─ rules.yaml              # 资格审查条款
-└─ app.yaml
+│  ├─ national/   # gsxt、信用中国、执行信息公开网…（P3 骨架已就位）
+│  ├─ regions/    # sichuan/ guangdong/ …（地区插件，P5）
+│  └─ owners/     # powerchina/ …（招标人集团禁入名单，P4）
+├─ web/           # 本地 Web UI（P2；templates 随包分发）
+├─ config/        # sources_registry.yaml / rules.yaml / app.yaml（随包分发的唯一登记处）
+└─ main.py        # CLI 入口（bqc）
 ```
 
-## 开发
+## 安装与运行
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -e .[dev]     # Windows
-.venv/bin/pip install -e ".[dev]"       # macOS/Linux
-pytest
+.venv/Scripts/pip install -e ".[dev]"     # Windows
+.venv/bin/pip install -e ".[dev]"         # macOS/Linux
+pytest                                    # 全量测试
+bqc init-db                               # 初始化 SQLite（当前目录 data/）
+bqc serve                                 # 启动本地 Web UI（仅监听 127.0.0.1）
 ```
+
+安装版自包含：`app/config/` 配置与 `app/web/templates/` 模板随 wheel/sdist 分发，
+`python -m build` 产物可在脱离源码目录的环境安装运行（CI build job 自动验证）。
 
 ## 合规声明
 

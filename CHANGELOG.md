@@ -2,9 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.0] - 2026-09-04（P3 全国数据源 adapter 骨架）
+## [0.3.0] - 2026-09-04（P3 全国数据源 adapter 骨架 + P0 仓库基线修复）
 
-### Added
+### Fixed（P0 基线修复）
+- **修复项目无法安装**：`[tool.setuptools] packages = { include = [...] }` 写法非法，
+  setuptools 拒绝解析，`pip install -e .` 必失败（此前 CI 用 `|| pip install pytest`
+  兜底掩盖了该问题）；改为 `[tool.setuptools.packages.find]` 自动发现 `app*` 全部包
+- **修复 CI 解析失败**：删除 job 级 `if: ${{ hashFiles('tests/**/*.py') != '' }}`
+  （该表达式使 workflow 在解析阶段即失败）；删除安装 `||` 兜底——项目装不上时 CI
+  必须失败，不得靠单独安装 pytest 掩盖打包问题
+- **修复版本漂移**：pyproject/app.__version__/DB 版本种子/CLI `--version` 统一为
+  0.3.0；DB 版本种子改为以 `app.__version__` 为单点来源（0.1.0 硬编码清除）
+- **修复中文输出在旧代码页 Windows 上崩溃**（三平台 CI 实跑暴露的真实产品缺陷）：
+  CLI 编码契约明确化——管道/文件输出一律 UTF-8；真控制台保留本地代码页
+  （中文 Windows cp936 显示不受影响），errors=replace 保证任何代码页下不崩溃。
+  附带发现：父进程按本地代码页解码中文 UTF-8 管道输出时读线程会静默死亡
+  （stdout=None），测试已显式按 UTF-8 解码子进程输出
+- 修复安装版数据落点：Web UI 数据库默认路径由"仓库目录/data"改为当前工作目录
+  `/data`（与 CLI init-db 一致），安装版不再往 site-packages 写数据
+
+### Added（P0 基线修复）
+- 配置移入 `app/config/` 随包分发（sources_registry/rules/app 三个 yaml），
+  Web 模板经 package-data 进入构建产物——wheel/sdist 均自包含，脱离源码目录可运行
+- `scripts/smoke_installed.py` 安装烟测：四模块导入、模板/配置在位、模板可解析、
+  包元数据版本与 `app.__version__` 一致
+- `tests/test_packaging.py` 打包回归测试（资源随包分发 + 版本单点来源）
+- CI 新增 build job：`python -m build` 出 wheel+sdist，各自装入隔离 venv 后跑
+  `pip check` / CLI / 烟测（脱离源码目录执行）；test job 增加 `pip check`、
+  安装烟测与 CLI smoke
+- `build` 加入 dev 依赖
+
+### Added（P3 adapter 骨架）
 - `app/sources/national/`：6 个全国源 adapter 骨架——信用中国、执行信息公开网、
   安全生产信用、建筑市场监管平台、破产重整信息网、gsxt（验证码源）
 - SSRF 防护基座：仅 http/https；拒绝 localhost/环回/私有/保留地址，
@@ -19,7 +47,7 @@ All notable changes to this project will be documented in this file.
   （传输层 get 可注入测试），受 `nightly_mock_only` 门控（夜间/演示模式拒绝真实查询）；
   数据源失败状态（TIMEOUT/ERROR/BLOCKED/MANUAL）折算进总体结论，绝不归约 PASS
 
-### Fixed
+### Fixed（P3）
 - 演示场景 query_error 的总体结论由 NO_DATA 修正为 ERROR：
   此前数据源查询失败被吞（source_queries 全记 PASS、source_error 无规则消费）
 

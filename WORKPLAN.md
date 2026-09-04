@@ -31,9 +31,10 @@
 
 | # | 阶段 | 内容 | 完成标准 | 状态 |
 |---|------|------|----------|------|
+| P0 | 仓库基线修复 | 可靠安装/测试/构建：修 CI（删解析期失败条件与安装兜底）、修 setuptools 包发现、模板/配置随包分发、build 烟测、版本统一 0.3.0 | `pip install -e ".[dev]"` 成功；三平台 CI 实跑绿；wheel/sdist 隔离安装烟测过 | ☑ 09-04（107 测试全绿；安装版 Web 全链路冒烟过） |
 | P1 | 架构骨架 | 目录结构、数据模型、9 态状态模型、SourceAdapter/SourceRouter/RuleEngine/SourceRegistry 抽象、SQLite 建表（§16 全部表）、pytest 骨架 | `pytest` 绿；`python -m app.main --help` 可运行 | ☑ 09-04（47 测试全绿） |
 | P2 | 核心 Web UI | 本地 Web UI：项目创建、企业输入、地区/规则配置、核查任务页（FastAPI + 简单前端） | 浏览器可建项目、发起一次 mock 核查 | ☑ 09-04（8 场景 mock 全链路，52 测试全绿） |
-| P3 | 全国数据源 | 逐个 adapter：信用中国、执行信息公开网、安全生产信用、建筑市场监管平台、gsxt（骨架） | 每个 adapter 有 fixture mock 测试；真实联调单列待办 | ☐ |
+| P3 | 全国数据源 | 逐个 adapter：信用中国、执行信息公开网、安全生产信用、建筑市场监管平台、gsxt（骨架） | 每个 adapter 有 fixture mock 测试；真实联调单列待办 | ◐ **adapter 骨架完成**（6 源：gsxt/creditchina/zxgk/mem/jzsc/pcczdc，fixture mock 测试全绿，含 SSRF 基座与传输状态映射）；**真实官网联调待 P3R**（query_url 人工复核回填 + 解析器按真实响应修正 + 验证码源真机联调，需白天人工配合） |
 | P4 | 集团数据源 | 中国电建禁入供应商 adapter（ec.powerchina.cn）+ "待人工核查"兜底 | mock 测试绿；无法公开验证的必须返回 MANUAL | ☐ |
 | P5 | 地区插件 | 四川完整插件 + 1 个非川插件（如广东）验证插件机制 | 两个插件不动核心代码即可注册生效 | ☐ |
 | P6 | 证据系统 | 截图/HTML 留痕、SHA-256、查询日志、人工复核流 | 每条结论可回链证据；哈希校验测试绿 | ☐ |
@@ -56,7 +57,7 @@
   真实测试企业数据（任务书 §20）只存 `local/`。
 - **合规**：不破解验证码、不绕 WAF、不代理池、不高频并发；同一政府网站同一时刻只查一个企业。
 - **SSRF 防护**：adapter 发起服务端请求只允许 http/https；请求前校验 host，拒绝 localhost、
-  环回、私有与保留地址；official_home/query_url 一律来自 `config/sources_registry.yaml` 并记录进证据。
+  环回、私有与保留地址；official_home/query_url 一律来自 `app/config/sources_registry.yaml` 并记录进证据。
 
 ## 四、夜间现实约束（务必清醒）
 
