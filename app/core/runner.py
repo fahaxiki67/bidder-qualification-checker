@@ -15,8 +15,9 @@ from pathlib import Path
 import yaml
 
 from ..sources.mock import findings_for
-from ..sources.national.base import query_source
+from ..sources.national.base import AdapterOutcome, load_adapter, query_source
 from .db import connect
+from .evidence import save_evidence
 from .models import Company, Finding, Project
 from .registry import SourceRegistry
 from .router import plan_with_exclusions
@@ -59,6 +60,64 @@ def _load_check_target(conn: sqlite3.Connection, pc_id: int):
         (pc["company_id"],),
     ).fetchone()
     return pc, proj, comp
+
+
+def _load_imported_findings(source, company, db_path: str | Path):
+    """读取人工导入的名单证据文件，经 adapter.parse（含主体一致性）产出 Finding。
+
+    证据来自 evidence 表（kind=owner_ban, query_id IS NULL, 文件在盘且哈希可复核）。
+    文件缺失/损坏/解析失败 → 返回 None（维持原 MANUAL 结论，绝不伪造评判成功）。
+    """
+    import json as _json
+    import sqlite3 as _sqlite3
+
+    from .evidence import evidence_dir_for, verify_evidence
+
+    conn = _sqlite3.connect(str(db_path))
+    conn.row_factory = _sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, file_path FROM evidence "
+            "WHERE source_id = ? AND kind = ? AND query_id IS NULL",
+            (source.id, "owner_ban"),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    edir = evidence_dir_for(db_path)
+    texts: list[str] = []
+    for r in rows:
+        ok, broken = verify_evidence(db_path, r["id"])
+        if broken:
+            continue  # 已篡改/损坏的证据不得作为评判依据
+        fp = Path(r["file_path"])
+        if not fp.is_absolute():
+            fp = edir / fp.name
+        try:
+            texts.append(fp.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    if not texts:
+        return None
+    adapter = load_adapter(source)
+    findings = []
+    for t in texts:
+        try:
+            findings.extend(adapter.parse(t, company=company))
+        except Exception:
+            continue  # 单文件格式坏不拖垮整批导入
+    # 非同一主体（同名不同码）的导入记录在落库前剔除，对齐 adapter 层语义
+    findings = [f for f in findings
+                if f.attrs.get("match_result") != "DIFFERENT_SUBJECT"]
+    if not findings:
+        return None
+    from .status import Status
+    return AdapterOutcome(
+        source.id, Status.MANUAL, findings, source.query_url or source.official_home,
+        note=f"人工导入名单 {len(rows)} 份，经主体一致性检查后离线评判 "
+             f"{len(findings)} 条记录（状态保持 MANUAL 待人工确认）",
+    )
 
 
 def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
@@ -106,6 +165,11 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
             for e in sources:
                 try:
                     out = query_source(e, company, get=get)
+                    # P6：manual_intake 源（内部名单）读取人工导入的证据文件离线评判
+                    if e.automation_mode == "manual_intake" and not out.findings:
+                        imp = _load_imported_findings(e, company, db_path)
+                        if imp is not None:
+                            out = imp
                 except Exception as exc:
                     # 单个数据源异常不得拖垮整个项目核查（P0.5 §四）；
                     # 错误信息保留进 note 供追溯，状态=ERROR 绝不伪造成功
@@ -117,6 +181,7 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                 per_source[e.id] = list(out.findings)
                 notes[e.id] = out.note
         else:
+            out = None
             findings = findings_for(scenario, company, project)
             primary = sources[0] if sources else None
             for e in sources:
@@ -156,6 +221,15 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                  e.query_url or e.official_home, payload, run_id),
             )
             qid = cur.lastrowid
+            # P6 证据系统：真实响应原文落盘（SHA-256），结论可回链（mock 演示不落盘）
+            if out is not None and getattr(out, "raw_text", ""):
+                save_evidence(
+                    db_path, conn=conn, source_id=e.id, query_id=qid,
+                    url=e.query_url or e.official_home,
+                    raw_text=out.raw_text,
+                    kind="raw_response",
+                    key_text=f"HTTP {out.http_status} · {len(out.raw_text)} 字符",
+                )
             for x in fnd:
                 conn.execute(
                     "INSERT INTO findings (query_id, company_id, kind, grade, description, start_date, end_date, attrs_json) "

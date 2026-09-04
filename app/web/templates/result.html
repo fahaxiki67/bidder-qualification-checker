@@ -32,19 +32,56 @@
 </div>
 
 <div class="card">
-  <h2>数据源查询日志</h2>
+  <h2>数据源查询日志（证据回链）</h2>
   <table>
-    <tr><th>数据源</th><th style="width:100px">查询状态</th><th style="width:170px">查询时间</th><th>入口</th></tr>
+    <tr><th>数据源</th><th style="width:100px">查询状态</th><th style="width:170px">查询时间</th><th>入口 / 证据（SHA-256 前 12 位）</th></tr>
     {% for q in d.queries %}
     <tr>
       <td>{{ q.source_id }}</td>
       <td>{{ q.status }}</td>
       <td>{{ q.queried_at }}</td>
-      <td style="font-size:12px;color:#66788c;">{{ q.query_url or "—" }}</td>
+      <td style="font-size:12px;color:#66788c;">
+        {{ q.query_url or "—" }}
+        {% for ev in q.evidence %}
+          <div>📎 <a href="/evidence/{{ ev.id }}">{{ ev.kind }} {{ ev.sha256[:12] }}</a>
+          <span style="font-size:11px;">{{ ev.captured_at }} · {{ ev.key_text }}</span></div>
+        {% else %}
+          <div>（无原文证据：转人工类查询由人工渠道取证）</div>
+        {% endfor %}
+      </td>
     </tr>
     {% endfor %}
   </table>
-  <p style="font-size:12px;color:#66788c;">证据文件（截图/HTML/SHA-256）将在 P6 证据系统接入后在此回链。</p>
+
+  <h2 style="margin-top:20px;">人工复核（结论作为审计记录留痕，不自动改判机器结论）</h2>
+  <table>
+    <tr><th>数据源查询</th><th style="width:90px">复核人</th><th style="width:140px">结论</th><th>备注</th><th style="width:170px">时间</th></tr>
+    {% for r in d.reviews %}
+    <tr>
+      <td>{{ (d.queries | selectattr("id", "equalto", r.query_id) | list | first).source_id if d.queries else r.query_id }}</td>
+      <td>{{ r.reviewer }}</td>
+      <td>{{ r.decision }}</td>
+      <td>{{ r.note }}</td>
+      <td>{{ r.reviewed_at }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="color:#66788c;">尚无人工复核记录</td></tr>
+    {% endfor %}
+  </table>
+  {% if d.queries %}
+  <form method="post" action="/checks/{{ d.pc.id }}/review" style="margin-top:10px;">
+    <select name="query_id">
+      {% for q in d.queries %}<option value="{{ q.id }}">{{ q.source_id }}（{{ q.queried_at }}）</option>{% endfor %}
+    </select>
+    <input name="reviewer" placeholder="复核人" required style="width:110px;">
+    <select name="decision">
+      <option>确认无误</option><option>记录非本企业</option>
+      <option>证据不足再查</option><option>其他（见备注）</option>
+    </select>
+    <input name="note" placeholder="备注" style="width:200px;">
+    <button type="submit">提交复核</button>
+  </form>
+  {% endif %}
 </div>
 {% endif %}
 

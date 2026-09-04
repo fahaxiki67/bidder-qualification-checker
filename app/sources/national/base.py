@@ -240,6 +240,8 @@ class AdapterOutcome:
     findings: list = field(default_factory=list)
     query_url: str | None = None
     note: str = ""
+    raw_text: str = ""            # 原始响应（P6 证据系统落盘+SHA-256）
+    http_status: int | None = None
 
 
 class NationalAdapter:
@@ -270,12 +272,14 @@ class NationalAdapter:
             )
         fr = fetch(url, get=get, timeout=timeout)
         if fr.status is not Status.PASS:
-            return AdapterOutcome(self.source_id, fr.status, [], fr.url, note=fr.note)
+            return AdapterOutcome(self.source_id, fr.status, [], fr.url, note=fr.note,
+                                  raw_text=fr.text, http_status=fr.http_status)
         try:
             findings = self.parse(fr.text, company=company)
         except Exception as e:  # 解析失败=查询失败，绝不伪造成功
             return AdapterOutcome(self.source_id, Status.ERROR, [], fr.url,
-                                  note=f"响应解析失败：{e.__class__.__name__}: {e}")
+                                  note=f"响应解析失败：{e.__class__.__name__}: {e}",
+                                  raw_text=fr.text, http_status=fr.http_status)
         # 主体一致性关卡（P0.5 §六）：DIFFERENT_SUBJECT 的记录不得成为本企业证据
         kept: list[Finding] = []
         dropped = 0
@@ -288,12 +292,16 @@ class NationalAdapter:
         if dropped:
             note += f"；剔除 {dropped} 条非同一主体记录（主体标识对不上，属其他企业）"
         if kept:
-            return AdapterOutcome(self.source_id, Status.PASS, kept, fr.url, note=note)
+            return AdapterOutcome(self.source_id, Status.PASS, kept, fr.url, note=note,
+                                  raw_text=fr.text, http_status=fr.http_status)
         if dropped:
             # 来源只返回了别的企业的记录：对本企业而言=未检索到记录，绝不能算 PASS
             return AdapterOutcome(self.source_id, Status.NO_DATA, [], fr.url,
-                                  note=note + "；未检索到本企业的记录")
-        return AdapterOutcome(self.source_id, Status.NO_DATA, [], fr.url, note="查询成功，未检索到记录")
+                                  note=note + "；未检索到本企业的记录",
+                                  raw_text=fr.text, http_status=fr.http_status)
+        return AdapterOutcome(self.source_id, Status.NO_DATA, [], fr.url,
+                              note="查询成功，未检索到记录",
+                              raw_text=fr.text, http_status=fr.http_status)
 
     def parse(self, text: str, *, company: Company) -> list[Finding]:
         raise NotImplementedError(f"{self.__class__.__name__} 尚未实现解析（P3 骨架）")

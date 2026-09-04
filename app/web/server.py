@@ -9,12 +9,13 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from .. import __version__
 from ..core.db import connect, init_db
+from ..core.evidence import evidence_dir_for
 from ..core.runner import run_check
 from ..core.status import Status, report_label
 
@@ -140,16 +141,30 @@ def _load_result(pc_id: int):
         ] if run_id else []
         queries = [
             dict(q) for q in conn.execute(
-                "SELECT source_id, status, queried_at, query_url FROM source_queries "
+                "SELECT id, source_id, status, queried_at, query_url FROM source_queries "
                 "WHERE project_id = ? AND company_id = ? AND run_id = ? ORDER BY id",
                 (pc["project_id"], pc["company_id"], run_id),
             ).fetchall()
         ] if run_id else []
+        ev_by_query: dict[int, list[dict]] = {}
+        reviews: list[dict] = []
+        if run_id:
+            for ev in conn.execute(
+                "SELECT id, query_id, source_id, kind, sha256, captured_at, key_text "
+                "FROM evidence WHERE query_id IN (SELECT id FROM source_queries WHERE run_id = ?) "
+                "ORDER BY id", (run_id,)).fetchall():
+                ev_by_query.setdefault(ev["query_id"], []).append(dict(ev))
+            reviews = [dict(r) for r in conn.execute(
+                "SELECT mr.query_id, mr.reviewer, mr.decision, mr.note, mr.reviewed_at "
+                "FROM manual_reviews mr WHERE mr.run_id = ? ORDER BY mr.id", (run_id,)).fetchall()]
+        for q in queries:
+            q["evidence"] = ev_by_query.get(q["id"], [])
         import json
         for r in rules:
             r["reasons"] = json.loads(r.pop("reasons_json") or "[]")
         return {"pc": dict(pc), "project": dict(project), "company": dict(company),
-                "rules": rules, "queries": queries, "run": dict(run) if run else None}
+                "rules": rules, "queries": queries, "reviews": reviews,
+                "run": dict(run) if run else None}
     finally:
         conn.close()
 
@@ -180,9 +195,56 @@ def result(request: Request, pc_id: int):
             "data_label": report_label(Status(data_status)) if data_status else None,
             "data_badge": BADGE.get(data_status, "badge-muted"),
             "manual_required": manual_required,
+            "evidence_total": sum(len(q["evidence"]) for q in data["queries"]),
             "version": __version__,
         },
     )
+
+
+@app.get("/evidence/{evidence_id}")
+def view_evidence(evidence_id: int):
+    """证据原文查看（仅本地 UI）。路径必须落在证据目录内，防目录穿越。"""
+    conn = connect(DB_PATH)
+    conn.row_factory = __import__("sqlite3").Row
+    try:
+        row = conn.execute(
+            "SELECT file_path, sha256 FROM evidence WHERE id = ?", (evidence_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="证据不存在")
+    fp = Path(row["file_path"])
+    allowed_root = (evidence_dir_for(DB_PATH)).resolve()
+    if not str(fp.resolve()).startswith(str(allowed_root)):
+        raise HTTPException(status_code=400, detail="证据路径非法")
+    if not fp.is_file():
+        raise HTTPException(status_code=404, detail="证据文件缺失（可运行哈希校验定位）")
+    return PlainTextResponse(fp.read_text(encoding="utf-8", errors="replace"))
+
+
+@app.post("/checks/{pc_id}/review")
+def submit_review(pc_id: int, query_id: int = Form(...), reviewer: str = Form(...),
+                  decision: str = Form(...), note: str = Form("")):
+    """人工复核：结论是审计记录，不自动改判机器结论（P6 人工复核流）。"""
+    data = _load_result(pc_id)
+    if data is None or not data["run"]:
+        raise HTTPException(status_code=404, detail="核查记录不存在")
+    valid = {q["id"] for q in data["queries"]}
+    if query_id not in valid:
+        raise HTTPException(status_code=400, detail="query_id 不属于本次核查")
+    if decision not in ("确认无误", "记录非本企业", "证据不足再查", "其他（见备注）"):
+        raise HTTPException(status_code=400, detail="decision 非法")
+    conn = connect(DB_PATH)
+    try:
+        conn.execute(
+            "INSERT INTO manual_reviews (query_id, run_id, reviewer, decision, note) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (query_id, data["run"]["run_id"], reviewer.strip(), decision, note.strip()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return RedirectResponse(f"/checks/{pc_id}", status_code=303)
 
 
 @app.post("/checks/{pc_id}/run")

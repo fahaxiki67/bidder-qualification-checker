@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-09-05（P6 证据系统：SHA-256 留痕、回链、人工复核流、名单导入口）
+
+### Added
+- 证据落盘与校验（app/core/evidence.py）：真实响应原文写入证据目录（随数据库，
+  gitignored），SHA-256 登记，verify 随时复核完整性——篡改/损坏/缺失必被检出；
+  单证据 5MB 截断保护并在文内注明
+- runner 真实链路逐源落证据：证据行绑定产生它的 source_queries.id（结论可回链）；
+  mock 演示链路不落盘（证据只来自真实采集）
+- Web：结果页"数据源查询日志（证据回链）"（证据 kind+哈希前缀+时间+查看链接）、
+  证据原文查看器（路径穿越防护）；人工复核流——每条源查询可提交复核
+  （复核人/结论/备注），绑定核查批次 run_id，作为审计记录展示、不自动改判机器结论
+- CLI：`bqc import-bans <file>` 名单人工导入口（文件 SHA-256 留证，名单文件不入库）；
+  manual_intake 源核查时自动读取导入证据，经主体一致性检查离线评判——
+  人工证据触发条款 → decision=FAIL 且 data_status=MANUAL/manual_required 保留；
+  同名不同码名单记录在落库前剔除
+
+### 测试
+- 214 → 221 项全绿（tests/test_evidence.py：哈希回环/篡改检出/回链/查看器/
+  复核流/导入评判闭环/错主体不绑定）
+
 ## [0.6.0] - 2026-09-05（P5 地区插件机制：四川 + 广东）
 
 ### Added

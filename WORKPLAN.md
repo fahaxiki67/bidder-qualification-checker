@@ -38,7 +38,7 @@
 | P3 | 全国数据源 | 逐个 adapter：信用中国、执行信息公开网、安全生产信用、建筑市场监管平台、gsxt（骨架） | 每个 adapter 有 fixture mock 测试；真实联调单列待办 | ◐ **adapter 骨架完成**（6 源：gsxt/creditchina/zxgk/mem/jzsc/pcczdc，fixture mock 测试全绿，含 SSRF 基座与传输状态映射）；**真实官网联调待 P3R**（query_url 人工复核回填 + 解析器按真实响应修正 + 验证码源真机联调，需白天人工配合） |
 | P4 | 集团数据源 | 中国电建禁入供应商 adapter（ec.powerchina.cn）+ "待人工核查"兜底 | mock 测试绿；无法公开验证的必须返回 MANUAL | ☑ 09-05（manual_intake：查询恒 MANUAL；人工导入口径离线评判 10 测试绿；204 全绿） |
 | P5 | 地区插件 | 四川完整插件 + 1 个非川插件（如广东）验证插件机制 | 两个插件不动核心代码即可注册生效 | ☑ 09-05（四川 sc_construction+sc_credit、广东 gd_construction；ast 锁定省名不进核心；docs/PLUGINS.md；214 测试绿） |
-| P6 | 证据系统 | 截图/HTML 留痕、SHA-256、查询日志、人工复核流 | 每条结论可回链证据；哈希校验测试绿 | ☐ |
+| P6 | 证据系统 | 截图/HTML 留痕、SHA-256、查询日志、人工复核流 | 每条结论可回链证据；哈希校验测试绿 | ☑ 09-05（响应原文落盘+SHA-256 回环/篡改检出；结果页证据回链+查看器；复核流绑 run_id；bqc import-bans 名单导入口离线评判闭环；221 测试绿） |
 | P7 | 报告 | Excel 明细表（11 个 sheet）+ PDF 报告；openpyxl/reportlab 或等价 | 用 mock 数据生成两份样张；"查询失败"绝不写成"无异常" | ☐ |
 | P8 | Windows 打包 | PyInstaller onefile/onedir + 启动脚本；用户数据写 `%LOCALAPPDATA%` | 本机打包成功可启动；CI 出 Windows artifact | ☐ |
 | P9 | macOS 打包 | CI 产 macOS arm64 包（本机无 mac，全靠 GitHub Actions） | CI 出 `*-macOS-arm64.zip` artifact | ☐ |

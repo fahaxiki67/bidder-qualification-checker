@@ -44,11 +44,37 @@ def main(argv=None) -> int:
     p_serve = sub.add_parser("serve", help="启动本地 Web UI（仅监听 127.0.0.1）")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8000)
+    p_import = sub.add_parser(
+        "import-bans", help="导入集团禁入名单 JSON（人工导入口，文件哈希留证；名单文件不入库）")
+    p_import.add_argument("file", help="名单 JSON 文件（契约见 app/sources/owners/powerchina.py）")
+    p_import.add_argument("--db", default=str(DEFAULT_DB), help="数据库路径")
+    p_import.add_argument("--source", default="powerchina_ban", help="数据源 id")
     args = parser.parse_args(argv)
 
     if args.command == "init-db":
         path = init_db(args.db)
         print(f"数据库已初始化: {path}")
+        return 0
+
+    if args.command == "import-bans":
+        from .core.evidence import save_evidence, verify_evidence
+
+        src = Path(args.file)
+        text = src.read_text(encoding="utf-8")
+        init_db(args.db)
+        eid, fpath, digest = save_evidence(
+            args.db, source_id=args.source,
+            url=f"file://{src.resolve()}", raw_text=text,
+            kind="owner_ban", grade="A",
+            key_text=f"人工导入名单：{src.name}（{len(text)} 字符）",
+        )
+        ok, broken = verify_evidence(args.db, eid)
+        if broken:
+            print("导入后哈希校验失败，请检查磁盘/权限：", broken)
+            return 1
+        print(f"名单证据已入库: evidence_id={eid} sha256={digest}")
+        print(f"存档路径: {fpath}")
+        print("后续核查（bqc serve / run_check）将自动经主体一致性检查离线评判该名单")
         return 0
 
     if args.command == "serve":
