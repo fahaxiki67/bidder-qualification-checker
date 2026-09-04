@@ -19,7 +19,7 @@ from ..sources.national.base import query_source
 from .db import connect
 from .models import Company, Finding, Project
 from .registry import SourceRegistry
-from .router import plan
+from .router import plan_with_exclusions
 from .rules import RuleEngine
 from .status import (
     Status,
@@ -87,7 +87,8 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
         company = Company(name=comp["name"], uscc=comp["uscc"],
                           registered_province=comp["registered_province"])
 
-        sources = plan(company, project, SourceRegistry.from_yaml(REGISTRY_YAML))
+        route = plan_with_exclusions(company, project, SourceRegistry.from_yaml(REGISTRY_YAML))
+        sources = route.planned
 
         # 逐源执行，得到每源查询状态与客观事实；失败状态绝不伪造成功。
         source_status: dict[str, Status] = {}
@@ -125,6 +126,17 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
         engine = RuleEngine()
         all_findings = [f for lst in per_source.values() for f in lst]
         results = engine.run_all(all_findings, project, company)
+
+        # 行业不适用源显式留痕（P0.5 §七）：NOT_APPLICABLE ≠ 查询无数据，
+        # 不参与数据层状态合并
+        for e, reason in route.not_applicable:
+            conn.execute(
+                "INSERT INTO source_queries (project_id, company_id, source_id, status, query_url, raw_json, run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (proj["id"], comp["id"], e.id, "NOT_APPLICABLE",
+                 e.query_url or e.official_home,
+                 json.dumps({"note": reason}, ensure_ascii=False), run_id),
+            )
         for e in sources:
             st = source_status[e.id]
             fnd = per_source.get(e.id, [])

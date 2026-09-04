@@ -34,6 +34,11 @@ NEVER_PASS: frozenset[Status] = frozenset(
     {Status.ERROR, Status.TIMEOUT, Status.BLOCKED, Status.MANUAL, Status.UNKNOWN}
 )
 
+#: 数据源"不适用"标记（P0.5 §七）：不属于九态判定结果，只是路由结论——
+#: 行业/集团不适用的源记录为该值，绝不写成 NO_DATA（"不适用"≠"查了没查到"），
+#: 也不参与数据层状态合并（不把总体结论顶成任何失败态）。
+NOT_APPLICABLE = "NOT_APPLICABLE"
+
 #: 决策层（规则评判）严重度：index 越小越严重。
 #: 规则可产出 UNKNOWN（C/D 级线索不足以 FAIL）与 NO_DATA（未检索到该类记录），
 #: 二者属于决策信息，排在 WARNING 之后、PASS 之前。
