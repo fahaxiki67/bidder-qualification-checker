@@ -107,3 +107,46 @@ jobs:
           name: bqc-windows-x64
           path: bqc-windows-x64.zip
           retention-days: 14
+
+  package-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pyinstaller
+      - name: Build binary (PyInstaller onefile, arm64)
+        run: pyinstaller bqc.spec --noconfirm
+      - name: Smoke frozen binary (含用户数据目录与 serve 验证)
+        run: |
+          set -e
+          ./dist/bqc --version
+          ./dist/bqc --help > /dev/null
+          mkdir smoke-cwd && cd smoke-cwd
+          ../dist/bqc init-db
+          cd ..
+          test -f "$HOME/Library/Application Support/bqc/data/bqc.sqlite3" \
+            || { echo "frozen 数据目录未落在 Application Support"; exit 1; }
+          ./dist/bqc serve --port 8123 & SERVE_PID=$!
+          sleep 6
+          curl -sf http://127.0.0.1:8123/ | grep -q "投标人资格智能核查系统" \
+            || { echo "serve 首页验证失败"; kill $SERVE_PID; exit 1; }
+          kill $SERVE_PID
+          echo "frozen serve OK"
+      - name: Package zip (binary + 启动脚本，保留可执行位)
+        run: |
+          mkdir stage
+          cp dist/bqc stage/
+          cp scripts/start_server.command stage/
+          chmod +x stage/bqc stage/start_server.command
+          cd stage && zip -r ../bqc-macOS-arm64.zip . && cd ..
+          unzip -l bqc-macOS-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bqc-macOS-arm64
+          path: bqc-macOS-arm64.zip
+          retention-days: 14
