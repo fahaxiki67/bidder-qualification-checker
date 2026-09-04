@@ -13,16 +13,59 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # 代码骨架就位（存在 tests）后启用；纯文档仓库阶段跳过，保持 CI 绿
-    if: ${{ hashFiles('tests/**/*.py') != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install
+      - name: Install (项目装不上时必须失败，禁止单独装 pytest 兜底)
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" || pip install pytest pytest-asyncio pyyaml
+          python -m pip install -e ".[dev]"
+      - name: Dependency sanity check
+        run: python -m pip check
+      - name: Installed-package smoke test
+        run: python scripts/smoke_installed.py
+      - name: CLI smoke test
+        run: python -m app.main --help
       - name: Test
         run: pytest -q
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Artifacts exist
+        shell: bash
+        run: |
+          ls -la dist/
+          test -n "$(ls dist/*.whl 2>/dev/null)" || { echo "wheel 缺失"; exit 1; }
+          test -n "$(ls dist/*.tar.gz 2>/dev/null)" || { echo "sdist 缺失"; exit 1; }
+      - name: Wheel -> isolated venv -> smoke (脱离源码目录运行)
+        shell: bash
+        run: |
+          python -m venv .venv-wheel
+          .venv-wheel/bin/python -m pip install --upgrade pip
+          .venv-wheel/bin/python -m pip install dist/*.whl
+          .venv-wheel/bin/python -m pip check
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/.venv-wheel/bin/python" -m app.main --help
+          "$GITHUB_WORKSPACE/.venv-wheel/bin/bqc" --version
+          "$GITHUB_WORKSPACE/.venv-wheel/bin/python" "$GITHUB_WORKSPACE/scripts/smoke_installed.py"
+      - name: Sdist -> isolated venv -> smoke (证明 sdist 自包含)
+        shell: bash
+        run: |
+          python -m venv .venv-sdist
+          .venv-sdist/bin/python -m pip install --upgrade pip
+          .venv-sdist/bin/python -m pip install dist/*.tar.gz
+          .venv-sdist/bin/python -m pip check
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/.venv-sdist/bin/python" -m app.main --help
+          "$GITHUB_WORKSPACE/.venv-sdist/bin/python" "$GITHUB_WORKSPACE/scripts/smoke_installed.py"
