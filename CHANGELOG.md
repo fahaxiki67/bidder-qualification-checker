@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] - 2026-09-05（P9 macOS 打包：PyInstaller arm64 + .command 启动脚本）
+
+### Added
+- scripts/start_server.command（可执行位入库）：双击即起本地 Web UI
+- CI 新增 package-macos job：PyInstaller arm64 构建 → frozen 冒烟
+  （--version/--help/init-db 落 `~/Library/Application Support/bqc/data/` 断言
+  + serve 首页实访问验证）→ zip 保留可执行位 → artifact；Release 附该包
+- 本机 M4 实测：同一 spec 构建、.command 启动、首页渲染、数据目录全过；
+  CI 产物下载后本机复验 --version 通过
+
+### 测试
+- 228 项全绿；CI 六 job（三平台 test + build + package-windows + package-macos）实跑全绿
+
 ## [0.9.0] - 2026-09-05（P8 Windows 打包：PyInstaller onefile + %LOCALAPPDATA%）
 
 ### Added

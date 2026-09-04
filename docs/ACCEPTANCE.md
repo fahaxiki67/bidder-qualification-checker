@@ -52,7 +52,7 @@
 
 - [x] 完整源码（随阶段推进持续更新）
 - [ ] Windows 安装包（P8）
-- [ ] macOS 构建包（P9）
+- [x] macOS 构建包（P9：CI arm64 zip=bqc+.command 启动脚本；本机实测+CI 产物复验）
 - [x] README
 - [x] 测试结果（每轮 PROGRESS.md 记录；当前 228 项全绿）
 - [ ] 已支持数据源清单（真实联调后才有"已支持"）

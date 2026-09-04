@@ -41,7 +41,7 @@
 | P6 | 证据系统 | 截图/HTML 留痕、SHA-256、查询日志、人工复核流 | 每条结论可回链证据；哈希校验测试绿 | ☑ 09-05（响应原文落盘+SHA-256 回环/篡改检出；结果页证据回链+查看器；复核流绑 run_id；bqc import-bans 名单导入口离线评判闭环；221 测试绿） |
 | P7 | 报告 | Excel 明细表（11 个 sheet）+ PDF 报告；openpyxl/reportlab 或等价 | 用 mock 数据生成两份样张；"查询失败"绝不写成"无异常" | ☑ 09-05（11 sheet 与 §16 表对应；PDF CID 中文字体；bqc report 子命令；样张已生成；"状态口径说明"sheet 明示红线；224 测试绿） |
 | P8 | Windows 打包 | PyInstaller onefile/onedir + 启动脚本；用户数据写 `%LOCALAPPDATA%` | 本机打包成功可启动；CI 出 Windows artifact | ☑ 09-05（CI windows-latest 构建 onefile exe；runner 冒烟 --version/--help/init-db 落 LOCALAPPDATA 断言；zip=exe+启动脚本 artifact；spec 先经本机 Mac 实测；228 测试绿）。真机 Windows 双击/业务实测留待用户验收 |
-| P9 | macOS 打包 | CI 产 macOS arm64 包（本机无 mac，全靠 GitHub Actions） | CI 出 `*-macOS-arm64.zip` artifact | ☐ |
+| P9 | macOS 打包 | CI 产 macOS arm64 包（本机无 mac，全靠 GitHub Actions） | CI 出 `*-macOS-arm64.zip` artifact | ☑ 09-05（CI macos-latest 构建+冒烟含 serve 实访问；zip=bqc+start_server.command 保留可执行位；本机 M4 同 spec 实测+CI 产物本机复验；228 测试绿）。注：开发环境已有 mac，采用本机+CI 双验证，优于原定单 CI |
 | P10 | GitHub 收尾 | CI 完整化（pytest+win+mac 构建）、Release yml、Issue 模板、验收表 | 打 tag 自动出 Release 挂双平台产物 | ☐ |
 
 ## 三、红线（任务书硬性要求，违者即错）
