@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bidder-qualification-checker"
-version = "0.12.0"
+version = "0.13.0"
 description = "投标人资格智能核查系统 — 把官方公开数据与项目资格审查条款对应起来，形成可追溯的资格前审证据链"
 readme = "README.md"
 requires-python = ">=3.10"

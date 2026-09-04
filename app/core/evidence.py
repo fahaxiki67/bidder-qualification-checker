@@ -68,7 +68,8 @@ def save_evidence(
     edir.mkdir(parents=True, exist_ok=True)
     fname = f"{digest[:12]}_{uuid.uuid4().hex[:8]}.txt"
     fpath = edir / fname
-    fpath.write_text(text, encoding="utf-8")
+    # 与哈希同用 replace：孤立代理字符等不可编码内容不得让证据落盘崩溃
+    fpath.write_text(text, encoding="utf-8", errors="replace")
 
     own = conn is None
     c = conn or sqlite3.connect(str(db_path))

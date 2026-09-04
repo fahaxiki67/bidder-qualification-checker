@@ -63,6 +63,7 @@ def create_and_run(
     scenario: str = Form("clean"),
     terms: list[str] = Form([]),   # 本项目启用的资格条款（结构化勾选，P0.5 §八）
 ):
+    years_back = max(1, min(10, years_back))  # 服务端钳制（前端 min/max 不可信）
     if not base_date:
         base_date = date.today().isoformat()
     try:
@@ -92,12 +93,20 @@ def create_and_run(
                 (company_name, uscc or None, registered_province or None),
             )
             company_id = cur.lastrowid
-        cur = conn.execute(
-            "INSERT INTO project_companies (project_id, company_id, status) "
-            "VALUES (?, ?, 'running')",
-            (project_id, company_id),
-        )
-        pc_id = cur.lastrowid
+        try:
+            cur = conn.execute(
+                "INSERT INTO project_companies (project_id, company_id, status) "
+                "VALUES (?, ?, 'running')",
+                (project_id, company_id),
+            )
+            pc_id = cur.lastrowid
+        except __import__("sqlite3").IntegrityError:
+            # 同项目同企业重复提交：幂等复用既有记录（重跑语义，绝不 500）
+            row = conn.execute(
+                "SELECT id FROM project_companies WHERE project_id = ? AND company_id = ?",
+                (project_id, company_id),
+            ).fetchone()
+            pc_id = row[0]
         conn.commit()
     finally:
         conn.close()
@@ -216,7 +225,8 @@ def view_evidence(evidence_id: int):
         raise HTTPException(status_code=404, detail="证据不存在")
     fp = Path(row["file_path"])
     allowed_root = (evidence_dir_for(DB_PATH)).resolve()
-    if not str(fp.resolve()).startswith(str(allowed_root)):
+    if not fp.resolve().is_relative_to(allowed_root):
+        # contains 关系而非前缀（/evil 不应匹配 /ev 前缀）
         raise HTTPException(status_code=400, detail="证据路径非法")
     if not fp.is_file():
         raise HTTPException(status_code=404, detail="证据文件缺失（可运行哈希校验定位）")

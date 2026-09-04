@@ -223,13 +223,18 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
             qid = cur.lastrowid
             # P6 证据系统：真实响应原文落盘（SHA-256），结论可回链（mock 演示不落盘）
             if out is not None and getattr(out, "raw_text", ""):
-                save_evidence(
-                    db_path, conn=conn, source_id=e.id, query_id=qid,
-                    url=e.query_url or e.official_home,
-                    raw_text=out.raw_text,
-                    kind="raw_response",
-                    key_text=f"HTTP {out.http_status} · {len(out.raw_text)} 字符",
-                )
+                try:
+                    save_evidence(
+                        db_path, conn=conn, source_id=e.id, query_id=qid,
+                        url=e.query_url or e.official_home,
+                        raw_text=out.raw_text,
+                        kind="raw_response",
+                        key_text=f"HTTP {out.http_status} · {len(out.raw_text)} 字符",
+                    )
+                except Exception as exc:
+                    # 证据落盘失败不拖垮核查：核查结论已入库，证据是辅助留痕
+                    import sys as _sys
+                    print(f"[warn] 证据落盘失败({e.id}): {exc}", file=_sys.stderr)
             for x in fnd:
                 conn.execute(
                     "INSERT INTO findings (query_id, company_id, kind, grade, description, start_date, end_date, attrs_json) "

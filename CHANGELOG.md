@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.0] - 2026-09-05（独立复核轮：六项 A 类缺陷修复）
+
+### Fixed（全数附回归测试）
+- 报告"数据源注册表"sheet 恒为空：DB source_registry 表无任何写入方——
+  改读包内 sources_registry.yaml（权威登记处），sheet 如实呈现全部源与模式
+- 证据文件写入编码与哈希不一致（utf-8 严格 vs replace）：孤立代理字符会让
+  证据落盘崩溃——统一 errors=replace，回环一致（测试：代理字符样例）
+- runner 证据落盘失败会中断整轮核查：降级为 stderr 告警，结论照常出
+  （测试：证据目录被文件占位时核查完成）
+- Web 同项目同企业重复提交 → UNIQUE 约束 500：幂等复用既有记录（重跑语义）
+- years_back 无服务端校验（负数/超大值直通）：钳制 1~10（前端 min/max 不可信）
+- 证据查看器路径校验用前缀判断（/evil 可绕过 /ev）：改 contains 关系判定
+  （测试：DB 行被篡改指向 /etc/passwd → 400）
+
+### 说明
+- 本轮为独立复核轮：系统性排查报告/证据/Web/runner/CLI，六项缺陷全部
+  在复核中发现并即修，233 → 238 项测试全绿
+
 ## [0.12.0] - 2026-09-05（P3R 准备：复核作业清单 + 单源联调工具）
 
 ### Added

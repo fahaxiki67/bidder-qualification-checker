@@ -73,9 +73,13 @@ def export_excel(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
         reviews = [dict(r) for r in conn.execute(
             "SELECT reviewer, decision, note, reviewed_at FROM manual_reviews "
             "WHERE run_id = ? ORDER BY id", (run_id,))] if run_id else []
-        registry = [dict(r) for r in conn.execute(
-            "SELECT id, name, level, province, owner_group, official_home, query_url, "
-            "automation_mode, enabled FROM source_registry ORDER BY id")]
+        # 注册表以包内 YAML 为权威（DB source_registry 表无写入方，P6 复核轮修复）
+        import yaml
+
+        reg_data = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / "config" / "sources_registry.yaml")
+            .read_text(encoding="utf-8")) or {}
+        registry = sorted(reg_data.get("sources") or [], key=lambda x: x.get("id", ""))
     finally:
         conn.close()
 
@@ -161,9 +165,11 @@ def export_excel(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
     ws = wb.create_sheet(_SHEET_TITLES[8])
     _write_table(ws, ["id", "名称", "层级", "省", "集团", "官方入口", "查询接口",
                       "自动化模式", "启用"],
-                 [(r["id"], r["name"], r["level"], r["province"], r["owner_group"],
-                   r["official_home"], r["query_url"], r["automation_mode"],
-                   "是" if r["enabled"] else "否") for r in registry])
+                 [(r.get("id", ""), r.get("name", ""), r.get("level", ""),
+                   r.get("province") or "", r.get("owner_group") or "",
+                   r.get("official_home") or "", r.get("query_url") or "",
+                   r.get("automation_mode", ""),
+                   "是" if r.get("enabled") else "否") for r in registry])
 
     # 10 状态口径说明（红线：失败绝不写成无异常）
     ws = wb.create_sheet(_SHEET_TITLES[9])

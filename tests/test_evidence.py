@@ -229,3 +229,47 @@ def test_import_bans_wrong_subject_never_binds(tmp_path, monkeypatch):
     finally:
         conn.close()
     assert overall == "MANUAL"
+
+
+# ---------- P6 复核轮回归 ----------
+
+def test_save_evidence_survives_lone_surrogates(tmp_path):
+    """孤立代理字符：哈希与文件同用 replace，落盘不崩溃且回环一致。"""
+    db = tmp_path / "d" / "t.sqlite3"
+    init_db(db)
+    raw = "正常内容\udcff带孤立代理"
+    eid, fpath, digest = save_evidence(db, source_id="s", url=None,
+                                       raw_text=raw, kind="k")
+    assert fpath.is_file()
+    assert digest == sha256_text(fpath.read_text(encoding="utf-8", errors="replace"))
+    ok, broken = verify_evidence(db, eid)
+    assert ok == 1 and broken == []
+
+
+def test_runner_survives_evidence_write_failure(env):
+    """证据目录被文件占位（写入必败）：核查照常完成，绝不因证据失败中断。"""
+    db, pcid, tmp_path = env
+    (tmp_path / "data" / "evidence").write_text("占位", encoding="utf-8")
+    overall = run_check(db, pcid, real_sources=True,
+                        get=lambda url, t: (200, json.dumps({"result": []})))
+    # 证据写失败被降级为告警：核查照常出结论（查询成功无记录→NO_DATA），绝不中断
+    assert overall == "NO_DATA"
+
+
+def test_evidence_viewer_rejects_path_outside_root(env, monkeypatch):
+    """被篡改的 DB 行指向证据目录之外 → 400 拒绝（contains 而非前缀判断）。"""
+    db, pcid, _ = env
+    run_check(db, pcid, real_sources=True,
+              get=lambda url, t: (200, json.dumps({"result": []})))
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO evidence (query_id, source_id, url, kind, file_path, sha256) "
+                 "VALUES (NULL, 'x', NULL, 'k', '/etc/passwd', '0'*64)")
+    conn.commit()
+    eid = conn.execute("SELECT id FROM evidence WHERE source_id='x'").fetchone()[0]
+    conn.close()
+    monkeypatch.setenv("BQC_DB", str(db))
+    import importlib
+    import app.web.server as server
+    importlib.reload(server)
+    from fastapi.testclient import TestClient
+    assert TestClient(server.app).get(f"/evidence/{eid}").status_code == 400

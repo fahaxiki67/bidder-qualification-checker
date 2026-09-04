@@ -75,3 +75,32 @@ def test_rerun_overwrites_overall(client):
     pc = r.headers["location"]
     r2 = client.post(pc + "/run", data={"scenario": "bid_ban"}, follow_redirects=True)
     assert "FAIL" in r2.text
+
+
+def test_duplicate_submit_is_idempotent(client):
+    """同项目同企业重复提交（双击/重试）→ 复用记录 303，绝不 500。"""
+    data = {"project_name": "重复项目", "base_date": "2026-09-05", "years_back": "3",
+            "company_name": "同一公司", "uscc": "91510112MACD5CDJ9F",
+            "scenario": "clean"}
+    r1 = client.post("/projects", data=data, follow_redirects=False)
+    r2 = client.post("/projects", data=data, follow_redirects=False)
+    assert r1.status_code == 303 and r2.status_code == 303
+
+
+def test_years_back_clamped_server_side(monkeypatch, tmp_path):
+    """years_back 越界值（99）被服务端钳制到 10（前端 min/max 不可信）。"""
+    import sqlite3
+    monkeypatch.setenv("BQC_DB", str(tmp_path / "b.sqlite3"))
+    importlib.reload(server) if False else None
+    import app.web.server as server_mod
+    importlib.reload(server_mod)
+    from fastapi.testclient import TestClient
+    c = TestClient(server_mod.app)
+    r = c.post("/projects", data={"project_name": "钳制", "base_date": "2026-09-05",
+                                  "years_back": "99", "company_name": "某公司",
+                                  "scenario": "clean"}, follow_redirects=False)
+    assert r.status_code == 303
+    conn = sqlite3.connect(server_mod.DB_PATH)
+    v = conn.execute("SELECT years_back FROM projects").fetchone()[0]
+    conn.close()
+    assert v == 10

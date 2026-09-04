@@ -54,7 +54,7 @@
 - [ ] Windows 安装包（P8）
 - [x] macOS 构建包（P9：CI arm64 zip=bqc+.command 启动脚本；本机实测+CI 产物复验）
 - [x] README
-- [x] 测试结果（每轮 PROGRESS.md 记录；当前 233 项全绿，CI 六 job+release 测试门）
+- [x] 测试结果（每轮 PROGRESS.md 记录；当前 238 项全绿，CI 六 job+release 测试门）
 - [ ] 已支持数据源清单（真实联调后才有"已支持"）
 - [x] 未支持数据源清单（即上表）
 - [x] 地区插件开发说明（docs/PLUGINS.md）
