@@ -17,7 +17,7 @@ import re
 import socket
 from dataclasses import dataclass, field
 from datetime import date
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from ...core.matching import DIFFERENT_SUBJECT, check_subject
 from ...core.models import Company, Finding, SourceRef
@@ -127,31 +127,50 @@ def _default_resolver(host: str) -> list[str]:
     return sorted({ai[4][0] for ai in socket.getaddrinfo(host, None)})
 
 
+#: 重定向跳数上限（P0.5 §九：每一跳目标都要重新过 SSRF 校验，防公网 URL 借
+#: 重定向跳入内网/环回；超限视为传输错误）
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
 def httpx_get(url: str, timeout: float = 15.0, *, client_factory=None, resolver=None) -> tuple[int, str]:
-    """默认传输层（仅真实联调使用）：政府网站直连不走代理；请求前复检 DNS。
+    """默认传输层（仅真实联调使用）：政府网站直连不走代理。
+
+    安全语义（P0.5 §九）：
+    - 禁用客户端自动重定向，改为显式逐跳跟随；
+    - 每一跳都重新执行 完整 URL 校验 + DNS 解析复检（防 DNS rebinding 与
+      "公网入口→内网目标"重定向绕过）；
+    - 任何一跳目标不安全 → UnsafeUrlError（fetch 映射 BLOCKED）。
 
     client_factory/resolver 供测试注入（httpx.MockTransport / 假 DNS），
     覆盖的是与生产完全相同的默认调用链，而非绕过它。
-    httpx 网络异常在此统一翻译为 TransportError 家族，fetch() 才能映射状态。
     """
     import httpx
 
-    host = (urlparse(url).hostname or "").rstrip(".")
-    resolve = resolver or _default_resolver
-    try:
-        addrs = resolve(host)
-    except OSError as e:
-        raise TransportError(f"DNS 解析失败：{host}: {e}") from e
-    assert_safe_url(url, resolved_ips=addrs)
     factory = client_factory or (lambda: httpx.Client(timeout=timeout, trust_env=False))
-    try:
-        with factory() as cli:
-            resp = cli.get(url)
-            return resp.status_code, resp.text
-    except TransportError:
-        raise
-    except Exception as e:
-        raise _translate_httpx_error(e) from e
+    resolve = resolver or _default_resolver
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        host = (urlparse(current).hostname or "").rstrip(".")
+        try:
+            addrs = resolve(host)
+        except OSError as e:
+            raise TransportError(f"DNS 解析失败：{host}: {e}") from e
+        assert_safe_url(current, resolved_ips=addrs)
+        try:
+            with factory() as cli:
+                resp = cli.get(current, follow_redirects=False)
+        except TransportError:
+            raise
+        except Exception as e:
+            raise _translate_httpx_error(e) from e
+        if resp.status_code in _REDIRECT_STATUSES:
+            location = resp.headers.get("location")
+            if location:
+                current = urljoin(current, location)  # 相对 Location 也按同规则校验
+                continue
+        return resp.status_code, resp.text
+    raise TransportError(f"重定向次数超过上限 {_MAX_REDIRECTS}")
 
 
 def fetch(url: str, get=None, timeout: float = 15.0) -> FetchResult:
