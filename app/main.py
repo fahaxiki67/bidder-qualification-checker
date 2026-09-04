@@ -12,13 +12,24 @@ DEFAULT_DB = Path("data/bqc.sqlite3")
 
 
 def _force_utf8_stdio() -> None:
-    """中文输出在旧代码页控制台（Windows cp1252/cp437）会 UnicodeEncodeError 崩溃。
+    """中文输出的编码契约：管道/文件一律 UTF-8；真控制台保留本地代码页。
 
-    强制 UTF-8：现代终端正常显示；旧控制台最多乱码，绝不因编码崩溃。
+    背景（CI Windows 实测）：stdout=cp1252 的控制台写中文会 UnicodeEncodeError
+    崩溃；而管道场景若子进程编码不确定，父进程按错误代码页解码会得到坏字节。
+    - 管道/文件：强制 UTF-8，消费方（测试/上游进程）按 UTF-8 解码即可；
+    - 真控制台：保留原编码（中文 Windows cp936 仍正常显示），
+      仅把不可编码字符降级为 '?'，旧代码页最多丢符号不崩溃。
     """
     for stream in (sys.stdout, sys.stderr):
-        if stream is not None and hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        try:
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # 流已关闭等极端场景，不阻断 CLI
+            pass
 
 
 def main(argv=None) -> int:
