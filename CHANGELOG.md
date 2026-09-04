@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-09-04（P3 全国数据源 adapter 骨架）
+
+### Added
+- `app/sources/national/`：6 个全国源 adapter 骨架——信用中国、执行信息公开网、
+  安全生产信用、建筑市场监管平台、破产重整信息网、gsxt（验证码源）
+- SSRF 防护基座：仅 http/https；拒绝 localhost/环回/私有/保留地址，
+  含十进制/十六进制点分与 IPv4-mapped IPv6 绕过形态；真实请求前复检 DNS 解析结果
+- 传输层状态映射：超时→TIMEOUT、403/429 等风控→BLOCKED、其余网络/HTTP 错误→ERROR、
+  2xx→查询成功；失败绝不归约 PASS，响应解析失败同按 ERROR
+- 查询 URL 只认注册表：query_url 未人工复核（为空）→ 一律 MANUAL，不写死未复核接口
+- 抽取管线输出客观 Finding（限制投标/证照当前状态/破产/法院记录等 kind），与 RuleEngine 联动
+- 测试 +47 项共 99 项全绿：SSRF 专项、传输状态映射、各源 fixture mock 解析、
+  规则联动（FAIL/WARNING/NO_DATA）、NEVER_PASS 不变量
+
+### 待办（真实联调，留白天人工配合）
+- 各源查询接口人工复核后回填 `query_url`/`last_verified`，解析器按真实响应格式修正
+- runner 真实链路接入（`nightly_mock_only` 门控，白天才启用）
+- zxgk/gsxt 验证码源：自动导航+人工验证联调
+
 ## [0.2.0] - 2026-09-04（P2 本地 Web UI）
 
 ### Added
