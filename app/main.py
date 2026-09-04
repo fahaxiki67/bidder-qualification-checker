@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -10,7 +11,18 @@ from .core.db import init_db
 DEFAULT_DB = Path("data/bqc.sqlite3")
 
 
+def _force_utf8_stdio() -> None:
+    """中文输出在旧代码页控制台（Windows cp1252/cp437）会 UnicodeEncodeError 崩溃。
+
+    强制 UTF-8：现代终端正常显示；旧控制台最多乱码，绝不因编码崩溃。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv=None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(
         prog="bqc", description="投标人资格智能核查系统 — 资格前审证据链工具"
     )
