@@ -160,6 +160,9 @@ def connect(path: str | Path) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p))
+    # Web 重跑/报告导出/核查并发下的 "database is locked"：写锁先等 5 秒再失败，
+    # 而不是立刻抛 sqlite3.OperationalError（0.18.1 复核修复）
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -167,13 +170,18 @@ def connect(path: str | Path) -> sqlite3.Connection:
 def init_db(path: str | Path) -> Path:
     conn = connect(path)
     try:
+        # WAL：读写不互斥，显著降低 Web 服务与 CLI 并发访问同一库的锁冲突。
+        # journal_mode 持久化在库文件上，幂等执行。
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
         _migrate(conn)
-        # 版本登记单点来源 app.__version__，避免库内硬编码与包版本漂移
+        # 版本登记单点来源 app.__version__，避免库内硬编码与包版本漂移。
+        # 按版本号去重（0.18.1 复核修复）：老库升级后表非空，旧逻辑
+        # "表为空才插入" 会漏登记新版本。
         conn.execute(
             "INSERT INTO app_versions (version) SELECT ? "
-            "WHERE NOT EXISTS (SELECT 1 FROM app_versions)",
-            (__version__,),
+            "WHERE NOT EXISTS (SELECT 1 FROM app_versions WHERE version = ?)",
+            (__version__, __version__),
         )
         conn.commit()
     finally:

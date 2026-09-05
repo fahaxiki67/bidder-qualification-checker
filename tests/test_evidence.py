@@ -1,4 +1,5 @@
 """P6 证据系统测试：落盘+SHA-256 回环、篡改检出、结论回链、人工复核流、名单导入闭环。"""
+import hashlib
 import json
 import sqlite3
 from datetime import date
@@ -273,3 +274,69 @@ def test_evidence_viewer_rejects_path_outside_root(env, monkeypatch):
     importlib.reload(server)
     from fastapi.testclient import TestClient
     assert TestClient(server.app).get(f"/evidence/{eid}").status_code == 400
+
+
+# ---------- 0.18.1 复核修复：截断哈希同源 / 孤立文件清理（外部复核建议） ----------
+
+def test_truncated_evidence_passes_hash_verification(tmp_path):
+    """超过上限的内容截断后，登记哈希与落盘字节必须一致（校验通过，不得误报篡改）。"""
+    from app.core.evidence import MAX_EVIDENCE_BYTES
+
+    db = tmp_path / "d" / "t.sqlite3"
+    init_db(db)
+    raw = "X" * (MAX_EVIDENCE_BYTES + 4096)
+    eid, fpath, digest = save_evidence(db, source_id="s", url=None,
+                                       raw_text=raw, kind="k")
+    assert fpath.stat().st_size <= MAX_EVIDENCE_BYTES
+    assert "已截断" in fpath.read_text(encoding="utf-8")
+    assert digest == hashlib.sha256(fpath.read_bytes()).hexdigest()
+    ok, broken = verify_evidence(db, eid)
+    assert ok == 1 and broken == []
+
+
+def test_failed_database_insert_removes_orphan_file(tmp_path):
+    """DB 登记失败不得遗留无记录的证据文件（盘有文件、库无记录=幽灵证据）。"""
+    db = tmp_path / "d" / "t.sqlite3"
+    db.parent.mkdir(parents=True)  # 故意不 init_db：无表 → INSERT 必败
+    with pytest.raises(sqlite3.OperationalError):
+        save_evidence(db, source_id="s", url=None, raw_text="x", kind="k")
+    edir = evidence_dir_for(db)
+    assert not list(edir.glob("*.txt"))
+
+
+def test_latest_owner_ban_snapshot_supersedes_old_snapshot(tmp_path, monkeypatch):
+    """新版完整名单移除企业后，旧名单不得继续触发当前判断（历史证据只留档不参判）。"""
+    db, pcid, tmp_path = _setup_owner_env(tmp_path, monkeypatch)
+    subj = {"subject_name": "测试建筑有限公司", "subject_uscc": "91510000TEST0000XX"}
+    v1 = {"bans": [{**subj, "list_level": "股份公司级", "scope": "全部",
+                    "ban_start": "2026-06-01", "ban_end": "2029-06-01",
+                    "document_name": "2026年第一批禁入名单"}]}
+    v2 = {"bans": []}  # 新版完整名单：该企业已被移除
+    f1 = tmp_path / "bans_v1.json"
+    f2 = tmp_path / "bans_v2.json"
+    f1.write_text(json.dumps(v1, ensure_ascii=False), encoding="utf-8")
+    f2.write_text(json.dumps(v2, ensure_ascii=False), encoding="utf-8")
+    from app.main import main as cli
+    assert cli(["import-bans", str(f1), "--db", str(db)]) == 0
+    assert run_check(db, pcid, real_sources=True) == "FAIL"  # 旧名单在判：条款4 FAIL
+
+    assert cli(["import-bans", str(f2), "--db", str(db)]) == 0
+    overall = run_check(db, pcid, real_sources=True)
+    conn = sqlite3.connect(db)
+    try:
+        # 只统计最新一轮核查的 findings（历史轮次的旧名单记录永久保留，不得删除）
+        n = conn.execute(
+            "SELECT COUNT(*) FROM findings WHERE query_id IN "
+            "(SELECT id FROM source_queries WHERE run_id = "
+            "(SELECT run_id FROM check_runs ORDER BY id DESC LIMIT 1))"
+        ).fetchone()[0]
+        n_rules = conn.execute(
+            "SELECT COUNT(*) FROM rule_results WHERE run_id = "
+            "(SELECT run_id FROM check_runs ORDER BY id DESC LIMIT 1) "
+            "AND rule_id = 'rule_owner_ban' AND status = 'FAIL'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 0  # 新快照评判后未新增任何 Finding（旧名单记录不再产生）
+    assert n_rules == 0  # 条款4 不再凭旧名单 FAIL
+    assert overall == "MANUAL"

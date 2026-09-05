@@ -45,11 +45,60 @@ def test_disabled_entries_excluded_from_enabled(registry):
     assert "gsxt" in enabled_ids
 
 
-def test_unknown_key_in_yaml_is_ignored(tmp_path):
+def test_unknown_key_in_yaml_is_rejected(tmp_path):
+    """0.18.1 复核修复：未知字段必须拒绝而非静默丢弃（拼错的配置不得悄悄失效）。"""
     p = tmp_path / "r.yaml"
     p.write_text(
         "sources:\n  - id: x\n    name: 某源\n    level: national\n    typo_field: 1\n",
         encoding="utf-8",
     )
-    reg = SourceRegistry.from_yaml(p)
-    assert reg.get("x").name == "某源"
+    with pytest.raises(ValueError, match="未知字段"):
+        SourceRegistry.from_yaml(p)
+
+
+def test_duplicate_source_id_is_rejected(tmp_path):
+    """重复 id 在旧实现里静默后者顶替前者，必须启动即报错。"""
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "sources:\n"
+        "  - id: x\n    name: 第一份\n    level: national\n"
+        "  - id: x\n    name: 第二份\n    level: national\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="重复数据源 id"):
+        SourceRegistry.from_yaml(p)
+
+
+def test_invalid_automation_mode_is_rejected(tmp_path):
+    """非法 automation_mode（如拼错 auto→automagic）不得静默按缺省处理。"""
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "sources:\n  - id: x\n    name: 某源\n    level: national\n"
+        "    automation_mode: automagic\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="automation_mode 非法"):
+        SourceRegistry.from_yaml(p)
+
+
+def test_owner_source_requires_owner_group(tmp_path):
+    """level=owner 而缺 owner_group：路由无法归组，必须配置期报错。"""
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "sources:\n  - id: x\n    name: 集团名单\n    level: owner\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="owner_group"):
+        SourceRegistry.from_yaml(p)
+
+
+def test_valid_manual_intake_owner_source_is_accepted(tmp_path):
+    """合法组合（owner+owner_group+manual_intake）不受新校验误伤（P6 语义）。"""
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "sources:\n  - id: x\n    name: 集团名单\n    level: owner\n"
+        "    owner_group: powerchina\n    automation_mode: manual_intake\n",
+        encoding="utf-8",
+    )
+    e = SourceRegistry.from_yaml(p).get("x")
+    assert e.level == "owner" and e.owner_group == "powerchina"

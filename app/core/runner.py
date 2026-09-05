@@ -66,9 +66,11 @@ def _load_imported_findings(source, company, db_path: str | Path):
     """读取人工导入的名单证据文件，经 adapter.parse（含主体一致性）产出 Finding。
 
     证据来自 evidence 表（kind=owner_ban, query_id IS NULL, 文件在盘且哈希可复核）。
-    文件缺失/损坏/解析失败 → 返回 None（维持原 MANUAL 结论，绝不伪造评判成功）。
+    0.18.1 复核修复：每个来源只评判【最新】一份完整快照（captured_at/id 最大），
+    历史名单不再合并参与评判——旧版名单未移除的企业不得因历史文件永久误判；
+    最新快照缺失/损坏/解析失败 → 返回 None（维持原 MANUAL 结论，绝不伪造评判
+    成功，也不回退旧快照顶替新名单）。
     """
-    import json as _json
     import sqlite3 as _sqlite3
 
     from .evidence import evidence_dir_for, verify_evidence
@@ -76,37 +78,32 @@ def _load_imported_findings(source, company, db_path: str | Path):
     conn = _sqlite3.connect(str(db_path))
     conn.row_factory = _sqlite3.Row
     try:
-        rows = conn.execute(
-            "SELECT id, file_path FROM evidence "
-            "WHERE source_id = ? AND kind = ? AND query_id IS NULL",
+        row = conn.execute(
+            "SELECT id, file_path, captured_at FROM evidence "
+            "WHERE source_id = ? AND kind = ? AND query_id IS NULL "
+            "ORDER BY captured_at DESC, id DESC LIMIT 1",
             (source.id, "owner_ban"),
-        ).fetchall()
+        ).fetchone()
     finally:
         conn.close()
-    if not rows:
+    if row is None:
         return None
     edir = evidence_dir_for(db_path)
-    texts: list[str] = []
-    for r in rows:
-        ok, broken = verify_evidence(db_path, r["id"])
-        if broken:
-            continue  # 已篡改/损坏的证据不得作为评判依据
-        fp = Path(r["file_path"])
-        if not fp.is_absolute():
-            fp = edir / fp.name
-        try:
-            texts.append(fp.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-    if not texts:
+    _, broken = verify_evidence(db_path, row["id"])
+    if broken:
+        return None  # 已篡改/损坏的证据不得作为评判依据，也不回退旧快照
+    fp = Path(row["file_path"])
+    if not fp.is_absolute():
+        fp = edir / fp.name
+    try:
+        text = fp.read_text(encoding="utf-8")
+    except OSError:
         return None
     adapter = load_adapter(source)
-    findings = []
-    for t in texts:
-        try:
-            findings.extend(adapter.parse(t, company=company))
-        except Exception:
-            continue  # 单文件格式坏不拖垮整批导入
+    try:
+        findings = adapter.parse(text, company=company)
+    except Exception:
+        return None  # 快照格式坏不伪造评判成功
     # 非同一主体（同名不同码）的导入记录在落库前剔除，对齐 adapter 层语义
     findings = [f for f in findings
                 if f.attrs.get("match_result") != "DIFFERENT_SUBJECT"]
@@ -115,8 +112,9 @@ def _load_imported_findings(source, company, db_path: str | Path):
     from .status import Status
     return AdapterOutcome(
         source.id, Status.MANUAL, findings, source.query_url or source.official_home,
-        note=f"人工导入名单 {len(rows)} 份，经主体一致性检查后离线评判 "
-             f"{len(findings)} 条记录（状态保持 MANUAL 待人工确认）",
+        note=f"人工导入名单最新快照（{row['captured_at']} 导入，evidence_id={row['id']}），"
+             f"经主体一致性检查后离线评判 {len(findings)} 条记录"
+             f"（状态保持 MANUAL 待人工确认）",
     )
 
 
@@ -158,6 +156,9 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
         source_status: dict[str, Status] = {}
         per_source: dict[str, list[Finding]] = {}
         notes: dict[str, str] = {}
+        # 每源结果按 source.id 隔离登记（0.18.1 复核修复）：查询/证据/状态
+        # 一律从本字典按源取回，杜绝跨循环复用单变量导致的证据串源
+        outcomes: dict[str, AdapterOutcome] = {}
         if real_sources:
             if _nightly_mock_only(Path(app_yaml) if app_yaml else None):
                 raise RuntimeError(
@@ -173,15 +174,16 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                 except Exception as exc:
                     # 单个数据源异常不得拖垮整个项目核查（P0.5 §四）；
                     # 错误信息保留进 note 供追溯，状态=ERROR 绝不伪造成功
-                    source_status[e.id] = Status.ERROR
-                    per_source[e.id] = []
-                    notes[e.id] = f"数据源执行异常：{exc.__class__.__name__}: {exc}"
-                    continue
+                    out = AdapterOutcome(
+                        source_id=e.id, status=Status.ERROR, findings=[],
+                        query_url=e.query_url or e.official_home,
+                        note=f"数据源执行异常：{exc.__class__.__name__}: {exc}",
+                    )
+                outcomes[e.id] = out
                 source_status[e.id] = Status(out.status.value)
                 per_source[e.id] = list(out.findings)
                 notes[e.id] = out.note
         else:
-            out = None
             findings = findings_for(scenario, company, project)
             primary = sources[0] if sources else None
             for e in sources:
@@ -209,7 +211,12 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
             )
         for e in sources:
             st = source_status[e.id]
+            outcome = outcomes.get(e.id)
             fnd = per_source.get(e.id, [])
+            # 查询 URL 优先取 adapter 实际使用的（重定向/回填后可能与注册表不同），
+            # 留痕必须与证据、状态同源（0.18.1 复核修复）
+            actual_url = (outcome.query_url if outcome is not None and outcome.query_url
+                          else e.query_url or e.official_home)
             payload = json.dumps(
                 {"note": notes.get(e.id, ""),
                  "findings": [x.__dict__ for x in fnd]},
@@ -218,18 +225,19 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                 "INSERT INTO source_queries (project_id, company_id, source_id, status, query_url, raw_json, run_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (proj["id"], comp["id"], e.id, st.value,
-                 e.query_url or e.official_home, payload, run_id),
+                 actual_url, payload, run_id),
             )
             qid = cur.lastrowid
             # P6 证据系统：真实响应原文落盘（SHA-256），结论可回链（mock 演示不落盘）
-            if out is not None and getattr(out, "raw_text", ""):
+            # 每源只落自己 outcome 的响应——串源会让证据正文与来源/状态对不上
+            if outcome is not None and getattr(outcome, "raw_text", ""):
                 try:
                     save_evidence(
                         db_path, conn=conn, source_id=e.id, query_id=qid,
-                        url=e.query_url or e.official_home,
-                        raw_text=out.raw_text,
+                        url=actual_url,
+                        raw_text=outcome.raw_text,
                         kind="raw_response",
-                        key_text=f"HTTP {out.http_status} · {len(out.raw_text)} 字符",
+                        key_text=f"HTTP {outcome.http_status} · {len(outcome.raw_text)} 字符",
                     )
                 except Exception as exc:
                     # 证据落盘失败不拖垮核查：核查结论已入库，证据是辅助留痕

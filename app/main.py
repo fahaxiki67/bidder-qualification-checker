@@ -42,8 +42,9 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command")
     p_init = sub.add_parser("init-db", help="初始化 SQLite 数据库（不存在则创建）")
     p_init.add_argument("--db", default=str(DEFAULT_DB), help="数据库文件路径")
-    p_serve = sub.add_parser("serve", help="启动本地 Web UI（仅监听 127.0.0.1）")
-    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve = sub.add_parser("serve", help="启动本地 Web UI（仅监听 127.0.0.1/localhost/::1）")
+    p_serve.add_argument("--host", default="127.0.0.1",
+                         help="监听地址；本工具无认证，仅允许本机回环地址")
     p_serve.add_argument("--port", type=int, default=8000)
     p_import = sub.add_parser(
         "import-bans", help="导入集团禁入名单 JSON（人工导入口，文件哈希留证；名单文件不入库）")
@@ -155,6 +156,13 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "serve":
+        # 无认证的本地工具：远程监听会把未加鉴权的核查/证据接口暴露到局域网，
+        # 非回环地址一律拒绝（0.18.1 复核修复，与 CLI 文案对齐）
+        allowed_hosts = {"127.0.0.1", "localhost", "::1"}
+        if args.host not in allowed_hosts:
+            print(f"拒绝启动：--host {args.host} 非本机回环地址。"
+                  f"本工具无认证机制，仅允许 {'、'.join(sorted(allowed_hosts))}")
+            return 2
         import uvicorn
         from .web.server import app as web_app
         uvicorn.run(web_app, host=args.host, port=args.port)

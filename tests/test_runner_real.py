@@ -140,3 +140,109 @@ def test_mock_query_error_overall_is_error(env):
     primary = next(r for r in rows if r["source_id"] == "creditchina")
     assert primary["status"] == "ERROR"
     assert run_check(db, pcid, scenario="clean") == "NO_DATA"
+
+
+# ---------- 0.18.1 复核修复：逐源证据隔离 / 异常兜底（外部复核建议） ----------
+
+TWO_AUTO_REGISTRY = {
+    "sources": [
+        {"id": "creditchina", "name": "信用中国", "level": "national",
+         "automation_mode": "auto",
+         "official_home": "https://www.creditchina.gov.cn/",
+         "query_url": "https://www.creditchina.gov.cn/q",
+         "adapter": "app.sources.national.creditchina"},
+        {"id": "mem_safety_credit", "name": "应急部安全信用", "level": "national",
+         "automation_mode": "auto",
+         "official_home": "https://www.mem.gov.cn/",
+         "query_url": "https://www.mem.gov.cn/q",
+         "adapter": "app.sources.national.mem"},
+    ]
+}
+
+BODY_A = json.dumps({"result": []})  # creditchina 契约：无记录
+BODY_B = json.dumps({"penalties": [  # mem 契约：一条省级限制投标
+    {**SUBJ, "content": "省级住建主管部门限制投标一年",
+     "authority_level": "province", "start_date": "2026-08-05",
+     "end_date": "2027-08-05"}]})
+
+
+@pytest.fixture()
+def two_auto_env(tmp_path, monkeypatch):
+    reg = tmp_path / "sources_registry.yaml"
+    reg.write_text(yaml.safe_dump(TWO_AUTO_REGISTRY, allow_unicode=True), encoding="utf-8")
+    app_yaml = tmp_path / "app.yaml"
+    app_yaml.write_text("nightly_mock_only: false\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "REGISTRY_YAML", reg)
+    monkeypatch.setattr(runner, "APP_YAML", app_yaml)
+    db = tmp_path / "t.sqlite3"
+    init_db(db)
+    conn = connect(db)
+    cur = conn.execute(
+        "INSERT INTO projects (name, base_date, years_back, terms) VALUES ('p','2026-09-05',3,'条款1')")
+    pid = cur.lastrowid
+    cur = conn.execute("INSERT INTO companies (name, uscc) VALUES ('测试公司','91510000TEST0000XX')")
+    cid = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO project_companies (project_id, company_id, status) VALUES (?,?, 'running')",
+        (pid, cid))
+    pcid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return db, pcid
+
+
+def _evidence_rows(db):
+    conn = connect(db)
+    conn.row_factory = __import__("sqlite3").Row
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT source_id, query_id, file_path, sha256 FROM evidence WHERE kind='raw_response'")]
+    finally:
+        conn.close()
+
+
+def test_each_source_saves_its_own_raw_response(two_auto_env):
+    """两个源返回不同正文，证据文件必须分别对应各自正文（串源=证据链不可信）。"""
+    db, pcid = two_auto_env
+
+    def get(url, t):
+        return (200, BODY_B if "mem.gov.cn" in url else BODY_A)
+
+    run_check(db, pcid, real_sources=True, get=get)
+    rows = {r["source_id"]: r for r in _evidence_rows(db)}
+    assert set(rows) == {"creditchina", "mem_safety_credit"}
+    from pathlib import Path as _P
+    assert _P(rows["creditchina"]["file_path"]).read_text(encoding="utf-8") == BODY_A
+    assert _P(rows["mem_safety_credit"]["file_path"]).read_text(encoding="utf-8") == BODY_B
+
+
+def test_last_manual_source_does_not_discard_previous_evidence(env):
+    """尾源（manual 无原文）不得让前面成功源的证据全部丢失（旧实现落证 0 份）。"""
+    db, pcid = env
+    run_check(db, pcid, real_sources=True, get=lambda url, t: (200, json.dumps(FIXTURE)))
+    rows = _evidence_rows(db)
+    assert [r["source_id"] for r in rows] == ["creditchina"]
+    from pathlib import Path as _P
+    assert _P(rows[0]["file_path"]).read_text(encoding="utf-8") == json.dumps(FIXTURE)
+
+
+def test_all_source_exceptions_do_not_crash_persistence(two_auto_env):
+    """全部源传输层异常时应正常落 ERROR，不应出现 UnboundLocalError。"""
+    db, pcid = two_auto_env
+
+    def boom(url, t):
+        raise RuntimeError("网络不可达")
+    overall = run_check(db, pcid, real_sources=True, get=boom)
+    rows = {r["source_id"]: r for r in _query_rows(db, pcid)}
+    assert rows["creditchina"]["status"] == "ERROR"
+    assert rows["mem_safety_credit"]["status"] == "ERROR"
+    assert "数据源执行异常" in json.loads(rows["creditchina"]["raw_json"])["note"]
+    assert overall == "ERROR"  # 源失败必须顶进总体结论，绝不静默成功
+    conn = connect(db)
+    try:
+        finished = conn.execute(
+            "SELECT finished_at, overall_status FROM check_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert finished[0] is not None and finished[1] == "ERROR"
+    finally:
+        conn.close()

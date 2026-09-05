@@ -16,9 +16,11 @@ from starlette.requests import Request
 from .. import __version__
 from ..core.db import connect, init_db
 from ..core.evidence import evidence_dir_for
+from ..core.rules import load_rule_specs
 from ..paths import default_db_path
 from ..core.runner import run_check
 from ..core.status import Status, report_label
+from ..sources.mock import SCENARIOS
 
 # 数据库默认路径：源码/CLI=当前工作目录 data/；PyInstaller 打包=用户数据目录
 # （Windows %LOCALAPPDATA%\bqc\data\，任务书 P8）。BQC_DB 环境变量优先级最高。
@@ -39,6 +41,54 @@ BADGE = {
 }
 
 app = FastAPI(title="投标人资格智能核查系统", version=__version__)
+
+# ---------- 表单输入校验（0.18.1 复核修复：非法输入显式 400，绝不静默吞掉） ----------
+
+#: 字段长度上限（静默截断会破坏证据与审计记录，超限直接拒绝）
+_MAX_NAME = 200      # 项目/企业名称
+_MAX_SHORT = 100     # 省份/行业/集团/复核人
+_MAX_NOTE = 2000     # 复核备注
+
+#: 资格条款白名单（rules.yaml 的结构化条款号），白名单外一律拒绝
+_VALID_TERMS = {s.clause for s in load_rule_specs().values() if s.clause}
+
+# USCC（GB 32100-2015）：18 位；字符集 31 个（去 I/O/S/V/Z）；
+# 第 18 位为校验码：C18 = 31 − (Σ(字符值×权重) mod 31)，结果 31 记 0
+_USCC_CHARSET = "0123456789ABCDEFGHJKLMNPQRTUWXY"
+_USCC_WEIGHTS = (1, 3, 9, 27, 19, 26, 16, 17, 20, 29, 25, 13, 8, 24, 10, 30, 28)
+
+
+def _normalize_uscc(uscc: str) -> str:
+    """去空格转大写；提供了 USCC 就校验长度/字符集/校验位，非法直接 400。
+
+    归一化必须发生在查重回填（同码复用既有企业）之前，否则大小写差异会
+    绕过 UNIQUE 去重产生重复企业。
+    """
+    value = (uscc or "").strip().upper()
+    if not value:
+        return value
+    if len(value) != 18 or any(c not in _USCC_CHARSET for c in value):
+        raise HTTPException(status_code=400, detail="统一社会信用代码应为 18 位有效字符（数字与大写字母，不含 I/O/S/V/Z）")
+    total = sum(_USCC_CHARSET.index(c) * w for c, w in zip(value[:17], _USCC_WEIGHTS))
+    if _USCC_CHARSET[(31 - total % 31) % 31] != value[17]:
+        raise HTTPException(status_code=400, detail="统一社会信用代码校验位不符，请核对录入")
+    return value
+
+
+def _validate_scenario(scenario: str) -> str:
+    """未知场景必须 400，不得静默按 clean/无异常处理（会伪造干净结论）。"""
+    if scenario not in SCENARIOS:
+        raise HTTPException(status_code=400, detail=f"未知测试场景：{scenario}")
+    return scenario
+
+
+def _validate_text(label: str, value: str, max_len: int, *, required: bool = False) -> str:
+    value = (value or "").strip()
+    if required and not value:
+        raise HTTPException(status_code=400, detail=f"{label}不得为空")
+    if len(value) > max_len:
+        raise HTTPException(status_code=400, detail=f"{label}不得超过 {max_len} 字")
+    return value
 
 
 @app.get("/")
@@ -61,8 +111,22 @@ def create_and_run(
     uscc: str = Form(""),
     registered_province: str = Form(""),
     scenario: str = Form("clean"),
-    terms: list[str] = Form([]),   # 本项目启用的资格条款（结构化勾选，P0.5 §八）
+    terms: list[str] | None = Form(None),  # 本项目启用的资格条款（结构化勾选，P0.5 §八）；默认 None 不可变
 ):
+    # 输入校验（0.18.1）：空白/超限/白名单外一律 400，绝不静默吞掉或按缺省处理
+    project_name = _validate_text("项目名称", project_name, _MAX_NAME, required=True)
+    company_name = _validate_text("企业名称", company_name, _MAX_NAME, required=True)
+    province = _validate_text("省份", province, _MAX_SHORT)
+    industry = _validate_text("行业", industry, _MAX_SHORT)
+    owner_group = _validate_text("招标人集团", owner_group, _MAX_SHORT)
+    registered_province = _validate_text("企业注册地省份", registered_province, _MAX_SHORT)
+    _validate_scenario(scenario)
+    uscc = _normalize_uscc(uscc)
+    term_list = [t for t in (terms or []) if t and t.strip()]
+    unknown = [t for t in term_list if t not in _VALID_TERMS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"未知资格条款：{'、'.join(unknown)}")
+
     years_back = max(1, min(10, years_back))  # 服务端钳制（前端 min/max 不可信）
     if not base_date:
         base_date = date.today().isoformat()
@@ -78,7 +142,7 @@ def create_and_run(
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (project_name, province or None, industry or None, owner_group or None,
              base.isoformat(), years_back,
-             ",".join(t for t in terms if t) or None),
+             ",".join(term_list) or None),
         )
         project_id = cur.lastrowid
         company_id = None
@@ -245,6 +309,8 @@ def submit_review(pc_id: int, query_id: int = Form(...), reviewer: str = Form(..
         raise HTTPException(status_code=400, detail="query_id 不属于本次核查")
     if decision not in ("确认无误", "记录非本企业", "证据不足再查", "其他（见备注）"):
         raise HTTPException(status_code=400, detail="decision 非法")
+    reviewer = _validate_text("复核人", reviewer, _MAX_SHORT, required=True)
+    note = _validate_text("复核备注", note, _MAX_NOTE)
     conn = connect(DB_PATH)
     try:
         conn.execute(
@@ -260,5 +326,6 @@ def submit_review(pc_id: int, query_id: int = Form(...), reviewer: str = Form(..
 
 @app.post("/checks/{pc_id}/run")
 def rerun(pc_id: int, scenario: str = Form("clean")):
+    _validate_scenario(scenario)
     run_check(DB_PATH, pc_id, scenario=scenario)
     return RedirectResponse(f"/checks/{pc_id}", status_code=303)

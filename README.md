@@ -4,8 +4,8 @@
 > 自动查询多个官方公开来源，把公开数据与本项目资格审查条款对应起来，
 > 形成可追溯的资格前审证据链，导出 Excel 核查表与 PDF 核查报告。
 
-**状态：v0.18.0（WORKPLAN P0~P10 全部完成；真实官网联调 P3R 待人工配合——作业清单见 docs/P3R_CHECKLIST.md，双平台验收操作单见 docs/UAT.md）。** 可靠性闭环（P0.5：状态合并/批次隔离/主体一致性/行业门控/terms 控制/SSRF 重定向）已完成； 架构骨架（P1）、本地 Web UI（P2）、
-全国数据源 adapter 骨架（P3）、集团禁入 adapter（P4）、地区插件机制（P5：四川+广东）、证据系统（P6）、报告（P7：Excel 明细 11 sheet + PDF，bqc report）已完成，
+**状态：v0.18.1（WORKPLAN P0~P10 全部完成；真实官网联调 P3R 待人工配合——作业清单见 docs/P3R_CHECKLIST.md，双平台验收操作单见 docs/UAT.md）。** 可靠性闭环（P0.5：状态合并/批次隔离/主体一致性/行业门控/terms 控制/SSRF 重定向）已完成； 架构骨架（P1）、本地 Web UI（P2）、
+全国数据源 adapter（P3：解析器已实现，真实接口响应格式待联调复核）、集团禁入 adapter（P4）、地区插件机制（P5：四川+广东）、证据系统（P6）、报告（P7：Excel 明细 11 sheet + PDF，bqc report）已完成，
 可靠性闭环（P0/P0.5）已完成；
 按 `WORKPLAN.md` 分阶段推进，进度见 `docs/PROGRESS.md`。
 
@@ -28,7 +28,7 @@
 app/
 ├─ core/          # models / router / rules / evidence / runner / db
 ├─ sources/
-│  ├─ national/   # gsxt、信用中国、执行信息公开网…（P3 骨架已就位）
+│  ├─ national/   # gsxt、信用中国、执行信息公开网…（解析器已实现；响应格式为联调前假设，待真实接口复核）
 │  ├─ regions/    # sichuan/ guangdong/ …（地区插件，P5）
 │  └─ owners/     # powerchina/ …（招标人集团禁入名单，P4）
 ├─ web/           # 本地 Web UI（P2；templates 随包分发）

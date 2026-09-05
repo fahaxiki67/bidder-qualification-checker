@@ -36,6 +36,22 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
+def evidence_payload(raw_text: str) -> bytes:
+    """证据的最终落盘字节（0.18.1 复核修复）。
+
+    截断标记在函数内追加——登记哈希与文件内容同源，触发截断也必须能通过
+    verify 的整文件复算（旧实现先算哈希再补标记，截断证据必然校验失败）。
+    与哈希同用 replace：孤立代理字符等不可编码内容不得让落盘崩溃。
+    """
+    payload = (raw_text or "").encode("utf-8", errors="replace")
+    if len(payload) <= MAX_EVIDENCE_BYTES:
+        return payload
+    marker = f"\n\n[原始证据超过 {MAX_EVIDENCE_BYTES} 字节，已截断]".encode("utf-8")
+    budget = MAX_EVIDENCE_BYTES - len(marker)
+    head = payload[:budget].decode("utf-8", errors="ignore").encode("utf-8")
+    return head + marker
+
+
 def evidence_dir_for(db_path: str | Path) -> Path:
     return Path(db_path).resolve().parent / "evidence"
 
@@ -55,33 +71,35 @@ def save_evidence(
     """把一份原始证据写盘并登记（返回 evidence_id, 文件路径, sha256）。
 
     文件名含内容哈希前缀：同名重查各自留档，互不覆盖（历史不可变）。
+    哈希一律按最终落盘字节计算（含截断标记，见 evidence_payload）。
     """
-    text = raw_text or ""
-    truncated = False
-    if len(text.encode("utf-8", errors="replace")) > MAX_EVIDENCE_BYTES:
-        text = text[: MAX_EVIDENCE_BYTES // 4]  # 按字符保守截断（CJK 4 字节上界）
-        truncated = True
-    digest = sha256_text(text)
-    if truncated:
-        text += f"\n\n[证据超 {MAX_EVIDENCE_BYTES} 字节已截断，哈希对应截断后内容]"
+    payload = evidence_payload(raw_text)
+    digest = hashlib.sha256(payload).hexdigest()
     edir = evidence_dir_for(db_path)
     edir.mkdir(parents=True, exist_ok=True)
     fname = f"{digest[:12]}_{uuid.uuid4().hex[:8]}.txt"
     fpath = edir / fname
-    # 与哈希同用 replace：孤立代理字符等不可编码内容不得让证据落盘崩溃
-    fpath.write_text(text, encoding="utf-8", errors="replace")
+    fpath.write_bytes(payload)
 
     own = conn is None
     c = conn or sqlite3.connect(str(db_path))
     try:
-        cur = c.execute(
-            "INSERT INTO evidence (query_id, source_id, url, kind, file_path, sha256, grade, key_text) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (query_id, source_id, url, kind, str(fpath), digest, grade, key_text),
-        )
-        if own:
-            c.commit()
-        return cur.lastrowid, fpath, digest
+        try:
+            cur = c.execute(
+                "INSERT INTO evidence (query_id, source_id, url, kind, file_path, sha256, grade, key_text) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (query_id, source_id, url, kind, str(fpath), digest, grade, key_text),
+            )
+            if own:
+                c.commit()
+            return cur.lastrowid, fpath, digest
+        except Exception:
+            # 登记失败不得遗留无 DB 记录的孤立文件（盘上有文件、库里无记录
+            # = 不可追溯也永不入校验的幽灵证据，0.18.1 复核修复）
+            fpath.unlink(missing_ok=True)
+            if own:
+                c.rollback()
+            raise
     finally:
         if own:
             c.close()
@@ -106,7 +124,8 @@ def verify_evidence(db_path: str | Path, evidence_id: int | None = None):
     for r in rows:
         p = Path(r["file_path"])
         try:
-            actual = sha256_text(p.read_text(encoding="utf-8", errors="replace"))
+            # 按最终落盘字节复算（与 save 同源；文本转码回环对非 UTF-8 不保真）
+            actual = hashlib.sha256(p.read_bytes()).hexdigest()
         except OSError as e:
             broken.append((r["id"], f"文件不可读：{e}"))
             continue
