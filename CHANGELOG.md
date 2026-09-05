@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [未发布]
+
+### Added
+- **Excel 报告内置实际公式案例（封面与汇总「状态统计」区块）**：跨表 `COUNTIF`
+  逐状态计数（条款核查结论 C 列 9 态 + 数据源查询日志 B 列 5 态多条件相加）、
+  `COUNTA` 批次规模统计、`SUM` 引用同表单元格汇总"异常与待人工合计"
+  （MANUAL/ERROR/TIMEOUT/BLOCKED/UNKNOWN——红线口径直接进公式）；
+  公式随明细行数联动（范围按当次数据行数构造，空批次给安全范围不产生反转引用），
+  Excel/WPS/LibreOffice 打开即重算（openpyxl 不写缓存值，已实测 LibreOffice 重算勾稽）
+- 状态列条件格式（公式规则）：条款核查结论 C 列 / 数据源查询日志 B 列按状态值
+  高亮——FAIL/ERROR/TIMEOUT/BLOCKED 红、MANUAL/UNKNOWN/WARNING 黄、PASS 绿
+- 公式安全契约收紧并测试锁死：程序构造的公式只允许出现在"封面与汇总"统计区块
+  （`data_type=='f'` 真公式），与 `_cell()` 消毒形成互斥双路径——数据路径零公式、
+  公式路径零第三方文本；`tests/test_excel_formulas.py` 5 条回归（275→280 测试）
+
 ## [0.19.0] - 2026-09-05（第二轮独立审计整改：报告安全 / 结论诚实性 / 并发加固）
 
 > 本轮合并另一独立 AI 审计（Arena 会话工作区，基于 v0.18.0 的 improvements.patch）。

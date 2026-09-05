@@ -24,3 +24,4 @@
 | 2026-09-05 (侦察工具轮) | P3R 工具 | scripts/recon_portal.py 门户侦察（自动导航+截图+接口候选捕获）；本机假门户离线验证（成功捕获 /api/search?q= 候选+2 截图）；CHECKLIST 增快捷方式；开发依赖不进打包产物 | 用户白天对真实门户运行（一条命令），看图确认 URL 回填 |
 | 2026-09-05 (工具链闭环轮) | P3R 工具链闭环 | check-source --save-evidence：联调实测响应原文存为哈希证据（p3r_probe）接入 P6 证据链；修局部 import 遮蔽 init_db 的作用域坑；239→240 全绿 | P3R 工具链齐备：侦察(recon_portal)→回填(人工)→实测留证(check-source --save-evidence)→离线评判(run_check) |
 | 2026-09-05 (CLI 收口轮) | CLI 体验 | bqc verify-evidence 证据校验子命令（UAT 两用）；report/import-bans 友好报错（退出码 2 无堆栈）；report 空库先建表；240→241 全绿 |
+| 2026-09-05 (公式案例轮·主会话) | 报告增强 | 封面与汇总新增「状态统计」区块：跨表 COUNTIF 逐状态计数 + 数据源 5 态多条件相加 + COUNTA 批次规模 + SUM 同表汇总"异常与待人工合计"（红线口径进公式）；范围按当次明细行数构造（空批次安全不反转）；条款/查询日志状态列条件格式；公式安全契约收紧=真公式只许出现在封面统计区、与 _cell() 消毒互斥双路径；tests/test_excel_formulas.py 5 条回归，275→280 全绿；Mac 实测：样张 LibreOffice headless 重算勾稽一致（FAIL 样张 FAIL=1/查询9源；ERROR 样张数据源异常=1 与 DB 逐条对上） | Windows/macOS 实测=push 后 CI 双平台 job；后续公式需求（如人工复核列联动）待用户反馈 |

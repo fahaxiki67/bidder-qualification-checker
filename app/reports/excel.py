@@ -9,7 +9,8 @@ import sqlite3
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.styles import Font
+from openpyxl.formatting.rule import CellIsRule
+from openpyxl.styles import Font, PatternFill
 
 from .. import __version__
 from ..core.status import Status, report_label
@@ -37,6 +38,85 @@ def _cell(value):
     if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
         return "'" + value
     return value
+
+
+#: 报告内置公式的唯一落点：封面与汇总的统计区块。
+#: 公式一律由程序按行号构造，绝不拼接企业名/处罚描述等第三方文本，
+#: 与 _cell() 消毒形成两条互斥路径——数据路径零公式，公式路径零外部文本。
+_STAT_SHEET = "封面与汇总"
+
+#: 状态列高亮（条件格式的公式规则）：红=否决/失败，黄=需人工/风险，绿=通过。
+_STATUS_HIGHLIGHTS = (
+    ("FAIL", "FFC7CE", "9C0006"),
+    ("ERROR", "FFC7CE", "9C0006"),
+    ("TIMEOUT", "FFC7CE", "9C0006"),
+    ("BLOCKED", "FFC7CE", "9C0006"),
+    ("MANUAL", "FFEB9C", "9C6500"),
+    ("UNKNOWN", "FFEB9C", "9C6500"),
+    ("WARNING", "FFEB9C", "9C6500"),
+    ("PASS", "C6EFCE", "006100"),
+)
+
+
+def _stat_range(sheet: str, col: str, count: int) -> str:
+    """跨表统计范围。空表也给安全范围（A2:A2 → 计数 0），绝不产生 A2:A1 反转引用。"""
+    return f"'{sheet}'!{col}2:{col}{max(count + 1, 2)}"
+
+
+def _highlight_status(ws, col: str, data_rows: int) -> None:
+    """按状态值给指定列加条件格式（打开工作簿即渲染，不依赖宏）。"""
+    rng = f"{col}2:{col}{max(data_rows + 1, 2)}"
+    for value, bg, fg in _STATUS_HIGHLIGHTS:
+        ws.conditional_formatting.add(rng, CellIsRule(
+            operator="equal", formula=[f'"{value}"'],
+            fill=PatternFill("solid", start_color=bg, end_color=bg),
+            font=Font(color=fg)))
+
+
+def _write_cover_stats(ws, rules, queries, evidences, reviews) -> None:
+    """封面与汇总追加"状态统计"区块：真实 Excel 公式，打开即重算、随数据行数联动。"""
+    ws.append([])
+    title = ws.cell(row=ws.max_row + 1, column=1,
+                    value="状态统计（Excel 公式实时联动，随明细数据重算）")
+    title.font = HEADER_FONT
+    header_row = ws.max_row + 1
+    for col, text in ((1, "统计项"), (2, "数量"), (3, "口径说明")):
+        ws.cell(row=header_row, column=col, value=text).font = HEADER_FONT
+
+    rule_rng = lambda col: _stat_range("条款核查结论", col, len(rules))  # noqa: E731
+    query_rng = lambda col: _stat_range("数据源查询日志", col, len(queries))  # noqa: E731
+
+    def add(label, formula, note):
+        ws.cell(row=ws.max_row + 1, column=1, value=label)
+        ws.cell(row=ws.max_row, column=2, value=formula)      # 公式：程序构造，直写
+        ws.cell(row=ws.max_row, column=3, value=_cell(note))  # 文本：一律走消毒
+
+    first_status_row = ws.max_row + 1
+    add("条款核查项数", f"=COUNTA({rule_rng('A')})", "含'不适用'条款")
+    add("触发否决条款（FAIL）", f'=COUNTIF({rule_rng("C")},"FAIL")',
+        "A/B 级官方证据触发否决")
+    add("风险提示（WARNING）", f'=COUNTIF({rule_rng("C")},"WARNING")', "发现风险，不足以否决")
+    add("通过（PASS）", f'=COUNTIF({rule_rng("C")},"PASS")', "查询成功且未发现触发记录")
+    add("需人工（MANUAL）", f'=COUNTIF({rule_rng("C")},"MANUAL")', "验证码/登录/复核——不是正常")
+    add("查询失败（ERROR）", f'=COUNTIF({rule_rng("C")},"ERROR")', "绝不是'无异常'")
+    add("查询超时（TIMEOUT）", f'=COUNTIF({rule_rng("C")},"TIMEOUT")', "绝不是'无异常'")
+    add("访问受限（BLOCKED）", f'=COUNTIF({rule_rng("C")},"BLOCKED")', "绝不是'无异常'")
+    add("证据不足（UNKNOWN）", f'=COUNTIF({rule_rng("C")},"UNKNOWN")', "绝不是'正常'")
+    add("不适用（NOT_APPLICABLE）", f'=COUNTIF({rule_rng("C")},"NOT_APPLICABLE")',
+        "行业/集团不匹配未查询")
+    add("异常与待人工合计", f"=SUM(B{first_status_row + 4}:B{first_status_row + 8})",
+        "MANUAL/ERROR/TIMEOUT/BLOCKED/UNKNOWN——红线：绝不视作'无异常'")
+    add("数据源查询项数", f"=COUNTA({query_rng('A')})", "本批次实际发起的源查询")
+    add("数据源异常/待人工",
+        f'=COUNTIF({query_rng("B")},"MANUAL")+COUNTIF({query_rng("B")},"ERROR")'
+        f'+COUNTIF({query_rng("B")},"TIMEOUT")+COUNTIF({query_rng("B")},"BLOCKED")'
+        f'+COUNTIF({query_rng("B")},"UNKNOWN")', "五个状态任一出现即需人工过目")
+    add("证据条数", f"=COUNTA({_stat_range('证据清单', 'A', len(evidences))})",
+        "带 SHA-256 的原始证据")
+    add("人工复核记录数", f"=COUNTA({_stat_range('人工复核记录', 'A', len(reviews))})",
+        "复核流写入的审计记录")
+    for col, width in ((1, 26), (2, 10), (3, 46)):
+        ws.column_dimensions[ws.cell(row=header_row, column=col).column_letter].width = width
 
 _SHEET_TITLES = (
     "封面与汇总", "项目信息", "企业信息", "条款核查结论", "数据源查询日志",
@@ -133,6 +213,7 @@ def export_excel(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
                "'未查到'≠'确认不存在'。"),
     ]
     _write_table(ws, ["项目", "内容"], rows)
+    _write_cover_stats(ws, rules, queries, evidences, reviews)
 
     # 2 项目信息
     ws = wb.create_sheet(_SHEET_TITLES[1])
@@ -156,6 +237,7 @@ def export_excel(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
         rule_rows.append((r["rule_id"], r.get("scope"), r["status"], label,
                           "；".join(r["reasons"])))
     _write_table(ws, ["规则", "层级", "状态", "结论用语", "判定依据"], rule_rows)
+    _highlight_status(ws, "C", len(rule_rows))
 
     # 5 数据源查询日志
     ws = wb.create_sheet(_SHEET_TITLES[4])
@@ -166,6 +248,7 @@ def export_excel(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
         q_rows.append((q["source_id"], q["status"], label, q["queried_at"],
                        q["query_url"], _json.loads(q["raw_json"] or "{}").get("note", "")))
     _write_table(ws, ["数据源", "状态", "结论用语", "查询时间", "入口", "备注"], q_rows)
+    _highlight_status(ws, "B", len(q_rows))
 
     # 6 发现明细
     ws = wb.create_sheet(_SHEET_TITLES[5])

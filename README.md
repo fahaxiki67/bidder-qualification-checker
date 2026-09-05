@@ -20,7 +20,7 @@
 - 采集与评判分离：Source Adapter 只回答"官方来源查到了什么"，Rule Engine 回答"是否触发否决条款"
 - 严格状态模型：`ERROR / TIMEOUT / BLOCKED / MANUAL / UNKNOWN` 永远不得自动算作 PASS
 - 证据链：每条结论可回溯到带 SHA-256 的原始证据（URL / 时间 / 截图 / 关键文字）
-- 输出：Excel 核查明细（兼容 Excel/WPS）+ PDF 核查报告，"查询失败"绝不写成"无异常"
+- 输出：Excel 核查明细（兼容 Excel/WPS；封面内置公式统计联动 + 状态列条件格式）+ PDF 核查报告，"查询失败"绝不写成"无异常"
 
 ## 架构
 

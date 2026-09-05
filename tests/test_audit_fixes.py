@@ -169,8 +169,11 @@ def test_excel_neutralises_formula_text(tmp_path):
     export_excel(db, pcid, out)
     import openpyxl
     wb = openpyxl.load_workbook(out)
+    # 文本型单元格一律不得带危险前缀（真公式单元格 data_type=='f'，只允许出现在
+    # 封面与汇总的统计区块，由 test_excel_formulas.py 单独锁白名单）
     risky = [c.value for ws in wb for row in ws.iter_rows() for c in row
-             if isinstance(c.value, str) and c.value[:1] in ("=", "+", "-", "@")]
+             if isinstance(c.value, str) and c.value[:1] in ("=", "+", "-", "@")
+             and c.data_type != "f"]
     assert risky == [], f"存在可直接被当公式执行的单元格：{risky}"
     texts = [c.value for ws in wb for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
     assert any(t.startswith("'=1+1") for t in texts), "危险值应保留内容并强制按文本处理"
