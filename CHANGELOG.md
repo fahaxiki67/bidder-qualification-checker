@@ -6,7 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Excel 报告内置实际公式案例（封面与汇总「状态统计」区块）**：跨表 `COUNTIF`
-  逐状态计数（条款核查结论 C 列 9 态 + 数据源查询日志 B 列 5 态多条件相加）、
+  逐状态计数（条款核查结论 C 列 Status 九态 + NOT_APPLICABLE 共 10 行 +
+  数据源查询日志 B 列 5 态多条件相加）、
   `COUNTA` 批次规模统计、`SUM` 引用同表单元格汇总"异常与待人工合计"
   （MANUAL/ERROR/TIMEOUT/BLOCKED/UNKNOWN——红线口径直接进公式）；
   公式随明细行数联动（范围按当次数据行数构造，空批次给安全范围不产生反转引用），
@@ -15,7 +16,15 @@ All notable changes to this project will be documented in this file.
   高亮——FAIL/ERROR/TIMEOUT/BLOCKED 红、MANUAL/UNKNOWN/WARNING 黄、PASS 绿
 - 公式安全契约收紧并测试锁死：程序构造的公式只允许出现在"封面与汇总"统计区块
   （`data_type=='f'` 真公式），与 `_cell()` 消毒形成互斥双路径——数据路径零公式、
-  公式路径零第三方文本；`tests/test_excel_formulas.py` 5 条回归（275→280 测试）
+  公式路径零第三方文本；`tests/test_excel_formulas.py` 6 条回归（275→281 测试）
+
+### Fixed
+- **封面「状态统计」补 NO_DATA 逐状态计数行（闲时复核轮发现）**：规则结果可产出
+  NO_DATA（未检索到记录 / 主管部门显示正常或延期 / 他集团禁入不适用），此前逐状态
+  计数只枚举 9 项，凡含 NO_DATA 规则的批次"条款核查项数">Σ分项，勾稽缺口且恰为
+  红线最强调的状态（"没有查到"≠"确认不存在"）；修复后 10 行全枚举，
+  `SUM`"异常与待人工合计"范围改为按 MANUAL/UNKNOWN 实际行号锚定（不再硬编码行号偏移）；
+  三场景样张 LibreOffice 重算 × DB 直查双路径勾稽全一致
 
 ## [0.19.0] - 2026-09-05（第二轮独立审计整改：报告安全 / 结论诚实性 / 并发加固）
 

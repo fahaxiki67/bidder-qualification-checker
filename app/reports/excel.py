@@ -90,21 +90,23 @@ def _write_cover_stats(ws, rules, queries, evidences, reviews) -> None:
         ws.cell(row=ws.max_row + 1, column=1, value=label)
         ws.cell(row=ws.max_row, column=2, value=formula)      # 公式：程序构造，直写
         ws.cell(row=ws.max_row, column=3, value=_cell(note))  # 文本：一律走消毒
+        return ws.max_row
 
-    first_status_row = ws.max_row + 1
+    def rule_count(status, label, note):
+        return add(label, f'=COUNTIF({rule_rng("C")},"{status}")', note)
+
     add("条款核查项数", f"=COUNTA({rule_rng('A')})", "含'不适用'条款")
-    add("触发否决条款（FAIL）", f'=COUNTIF({rule_rng("C")},"FAIL")',
-        "A/B 级官方证据触发否决")
-    add("风险提示（WARNING）", f'=COUNTIF({rule_rng("C")},"WARNING")', "发现风险，不足以否决")
-    add("通过（PASS）", f'=COUNTIF({rule_rng("C")},"PASS")', "查询成功且未发现触发记录")
-    add("需人工（MANUAL）", f'=COUNTIF({rule_rng("C")},"MANUAL")', "验证码/登录/复核——不是正常")
-    add("查询失败（ERROR）", f'=COUNTIF({rule_rng("C")},"ERROR")', "绝不是'无异常'")
-    add("查询超时（TIMEOUT）", f'=COUNTIF({rule_rng("C")},"TIMEOUT")', "绝不是'无异常'")
-    add("访问受限（BLOCKED）", f'=COUNTIF({rule_rng("C")},"BLOCKED")', "绝不是'无异常'")
-    add("证据不足（UNKNOWN）", f'=COUNTIF({rule_rng("C")},"UNKNOWN")', "绝不是'正常'")
-    add("不适用（NOT_APPLICABLE）", f'=COUNTIF({rule_rng("C")},"NOT_APPLICABLE")',
-        "行业/集团不匹配未查询")
-    add("异常与待人工合计", f"=SUM(B{first_status_row + 4}:B{first_status_row + 8})",
+    rule_count("FAIL", "触发否决条款（FAIL）", "A/B 级官方证据触发否决")
+    rule_count("WARNING", "风险提示（WARNING）", "发现风险，不足以否决")
+    rule_count("PASS", "通过（PASS）", "查询成功且未发现触发记录")
+    rule_count("NO_DATA", "未检索到（NO_DATA）", "'没有查到'≠'确认不存在'")
+    manual_row = rule_count("MANUAL", "需人工（MANUAL）", "验证码/登录/复核——不是正常")
+    rule_count("ERROR", "查询失败（ERROR）", "绝不是'无异常'")
+    rule_count("TIMEOUT", "查询超时（TIMEOUT）", "绝不是'无异常'")
+    rule_count("BLOCKED", "访问受限（BLOCKED）", "绝不是'无异常'")
+    never_pass_last = rule_count("UNKNOWN", "证据不足（UNKNOWN）", "绝不是'正常'")
+    rule_count("NOT_APPLICABLE", "不适用（NOT_APPLICABLE）", "行业/集团不匹配未查询")
+    add("异常与待人工合计", f"=SUM(B{manual_row}:B{never_pass_last})",
         "MANUAL/ERROR/TIMEOUT/BLOCKED/UNKNOWN——红线：绝不视作'无异常'")
     add("数据源查询项数", f"=COUNTA({query_rng('A')})", "本批次实际发起的源查询")
     add("数据源异常/待人工",

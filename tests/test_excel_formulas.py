@@ -106,6 +106,29 @@ def test_cover_stats_are_real_formulas_whitelisted(env):
         f"SUM 范围内不是状态计数公式：{summed}"
 
 
+def test_cover_stats_enumerate_all_decision_statuses(env):
+    """逐状态计数必须穷举 Status 全集——缺 NO_DATA 时"条款核查项数"与 Σ分项勾稽不齐。
+
+    rules.py 多条路径产出 NO_DATA 规则结果（未检索到记录/主管部门显示正常/他集团禁入），
+    封面若不数它，clean 批次会出现 项数 > 九个分项之和 的缺口，且"未检索到"恰是
+    红线最强调的状态（≠"确认不存在"），不得从统计区消失。
+    """
+    db, mk_pc, tmp_path = env
+    pc = mk_pc("未检索到项目")
+    assert run_check(db, pc, scenario="clean") in ("NO_DATA", "PASS")
+    out = tmp_path / "nodata.xlsx"
+    export_excel(db, pc, out)
+
+    import openpyxl
+    from app.core.status import Status
+    wb = openpyxl.load_workbook(out)
+    formulas = [v for _, _, v in _formula_cells(wb)]
+    rule_end = 1 + _detail_rows(wb["条款核查结论"])
+    for st in Status:  # 九态全集，一个都不能少（NOT_APPLICABLE 另有专行）
+        expected = f"=COUNTIF('条款核查结论'!C2:C{rule_end},\"{st.value}\")"
+        assert expected in formulas, f"封面统计缺 {st.value} 逐状态计数：{expected}"
+
+
 def test_stats_range_tracks_data_rows(env):
     """明细数据行数变化 → 公式统计范围随之联动（同一 run 前后对比）。"""
     db, mk_pc, tmp_path = env
