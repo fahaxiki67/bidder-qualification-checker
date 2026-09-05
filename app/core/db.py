@@ -159,10 +159,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
 def connect(path: str | Path) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p))
-    # Web 重跑/报告导出/核查并发下的 "database is locked"：写锁先等 5 秒再失败，
-    # 而不是立刻抛 sqlite3.OperationalError（0.18.1 复核修复）
-    conn.execute("PRAGMA busy_timeout = 5000")
+    # timeout=30 + WAL：Web UI 与 CLI 可能同时操作同一个库，
+    # 默认的 5s busy timeout + rollback journal 会直接抛 "database is locked"
+    # （0.18.1 引入 5s；0.19.0 按 Arena 审计建议放宽到 30s 并把 WAL 移入 connect）
+    conn = sqlite3.connect(str(p), timeout=30.0)
+    conn.execute("PRAGMA journal_mode = WAL")   # 读不阻塞写；幂等
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -170,9 +172,6 @@ def connect(path: str | Path) -> sqlite3.Connection:
 def init_db(path: str | Path) -> Path:
     conn = connect(path)
     try:
-        # WAL：读写不互斥，显著降低 Web 服务与 CLI 并发访问同一库的锁冲突。
-        # journal_mode 持久化在库文件上，幂等执行。
-        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
         _migrate(conn)
         # 版本登记单点来源 app.__version__，避免库内硬编码与包版本漂移。

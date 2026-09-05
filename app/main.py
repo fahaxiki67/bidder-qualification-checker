@@ -44,8 +44,11 @@ def main(argv=None) -> int:
     p_init.add_argument("--db", default=str(DEFAULT_DB), help="数据库文件路径")
     p_serve = sub.add_parser("serve", help="启动本地 Web UI（仅监听 127.0.0.1/localhost/::1）")
     p_serve.add_argument("--host", default="127.0.0.1",
-                         help="监听地址；本工具无认证，仅允许本机回环地址")
+                         help="监听地址；本工具无认证，非回环地址需显式 --allow-lan")
     p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.add_argument(
+        "--allow-lan", action="store_true",
+        help="显式允许监听非回环地址：本 UI 无任何鉴权，暴露后将导致企业核查数据可被他人访问")
     p_import = sub.add_parser(
         "import-bans", help="导入集团禁入名单 JSON（人工导入口，文件哈希留证；名单文件不入库）")
     p_import.add_argument("file", help="名单 JSON 文件（契约见 app/sources/owners/powerchina.py）")
@@ -156,16 +159,24 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "serve":
-        # 无认证的本地工具：远程监听会把未加鉴权的核查/证据接口暴露到局域网，
-        # 非回环地址一律拒绝（0.18.1 复核修复，与 CLI 文案对齐）
-        allowed_hosts = {"127.0.0.1", "localhost", "::1"}
-        if args.host not in allowed_hosts:
-            print(f"拒绝启动：--host {args.host} 非本机回环地址。"
-                  f"本工具无认证机制，仅允许 {'、'.join(sorted(allowed_hosts))}")
-            return 2
         import uvicorn
         from .web.server import app as web_app
-        uvicorn.run(web_app, host=args.host, port=args.port)
+
+        # 无认证的本地工具：非回环监听必须显式 --allow-lan（0.18.1 引入硬拒绝，
+        # 0.19.0 按 Arena 审计建议改为显式放行 + 告警，默认仍然拒绝）
+        loopback = {"127.0.0.1", "localhost", "::1"}
+        host = (args.host or "127.0.0.1").strip()
+        if host not in loopback and not args.allow_lan:
+            print(
+                f"拒绝监听非回环地址 {host}：本地 Web UI 无账号鉴权，"
+                "暴露到局域网/公网会让企业核查数据与证据可被他人访问。\n"
+                "确需内网多人访问请显式加 --allow-lan，并自行承担风险。",
+                file=sys.stderr)
+            return 2
+        if host not in loopback:
+            print(f"[warn] 已按 --allow-lan 监听 {host}：本服务无鉴权，仅限可信网络临时使用",
+                  file=sys.stderr)
+        uvicorn.run(web_app, host=host, port=args.port)
         return 0
 
     parser.print_help()

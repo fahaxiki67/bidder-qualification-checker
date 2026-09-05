@@ -1,12 +1,19 @@
 """本地 Web UI 服务器：项目创建 → 企业录入 → mock 核查 → 结果与证据入口。
 
 仅监听 127.0.0.1。数据库路径可用环境变量 BQC_DB 覆盖（默认 当前工作目录/data/bqc.sqlite3）。
+
+审计整改（0.19.0，Arena 审计）：
+- 导入本模块不得有副作用（此前 import 即建库，污染 cwd）：首次请求时按当次
+  BQC_DB 解析并建库；
+- 写操作（POST/PUT/PATCH/DELETE）同源校验：跨站表单必带 Origin/Referer，
+  来源主机非本机一律 403（本地 UI 无鉴权，防任意网页对本地服务发起写操作）。
 """
 from __future__ import annotations
 
 import os
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
@@ -24,8 +31,19 @@ from ..sources.mock import SCENARIOS
 
 # 数据库默认路径：源码/CLI=当前工作目录 data/；PyInstaller 打包=用户数据目录
 # （Windows %LOCALAPPDATA%\bqc\data\，任务书 P8）。BQC_DB 环境变量优先级最高。
-DB_PATH = Path(os.environ.get("BQC_DB") or default_db_path())
-init_db(DB_PATH)
+DB_PATH = Path(os.environ.get("BQC_DB") or default_db_path())  # 兼容旧引用（进程启动时快照）
+
+
+def db_path() -> Path:
+    """每次请求重新解析：BQC_DB 可在进程启动后变更（测试/打包场景需要）。"""
+    return Path(os.environ.get("BQC_DB") or default_db_path())
+
+
+def ensure_db() -> Path:
+    """首次用到时才建库：导入本模块无副作用，且表不存在时幂等补齐。"""
+    p = db_path()
+    init_db(p)
+    return p
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 BADGE = {
@@ -41,6 +59,35 @@ BADGE = {
 }
 
 app = FastAPI(title="投标人资格智能核查系统", version=__version__)
+
+# ---------- 跨站写保护（0.19.0 审计整改） ----------
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _same_origin(target_host: str, source_host: str) -> bool:
+    t, s = (target_host or "").lower(), (source_host or "").lower()
+    if t == s:
+        return True
+    return t in _LOOPBACK_HOSTS and s in _LOOPBACK_HOSTS
+
+
+@app.middleware("http")
+async def _cross_site_write_guard(request: Request, call_next):
+    """本地 UI 的跨站写保护（无鉴权，只能靠同源兜底）。
+
+    浏览器跨站表单提交必带 Origin/Referer；来源主机与本机不一致的一律 403。
+    无 Origin/Referer 的请求（CLI/脚本/TestClient 等非浏览器客户端）按既有行为放行。
+    """
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        src = request.headers.get("origin") or request.headers.get("referer")
+        if src:
+            host = urlparse(src).hostname or ""
+            if not _same_origin(request.url.hostname or "", host):
+                return PlainTextResponse(
+                    "跨站写请求已被拒绝（同源校验失败）：本服务仅限本机访问",
+                    status_code=403)
+    return await call_next(request)
+
 
 # ---------- 表单输入校验（0.18.1 复核修复：非法输入显式 400，绝不静默吞掉） ----------
 
@@ -78,7 +125,7 @@ def _normalize_uscc(uscc: str) -> str:
 def _validate_scenario(scenario: str) -> str:
     """未知场景必须 400，不得静默按 clean/无异常处理（会伪造干净结论）。"""
     if scenario not in SCENARIOS:
-        raise HTTPException(status_code=400, detail=f"未知测试场景：{scenario}")
+        raise HTTPException(status_code=400, detail=f"未知测试场景：{scenario}（可选：{'、'.join(sorted(SCENARIOS))}）")
     return scenario
 
 
@@ -135,7 +182,8 @@ def create_and_run(
     except ValueError:
         raise HTTPException(status_code=400, detail="核查基准日格式应为 YYYY-MM-DD")
 
-    conn = connect(DB_PATH)
+    db = ensure_db()
+    conn = connect(db)
     try:
         cur = conn.execute(
             "INSERT INTO projects (name, province, industry, owner_group, base_date, years_back, terms) "
@@ -175,12 +223,12 @@ def create_and_run(
     finally:
         conn.close()
 
-    run_check(DB_PATH, pc_id, scenario=scenario)
+    run_check(db, pc_id, scenario=scenario)
     return RedirectResponse(f"/checks/{pc_id}", status_code=303)
 
 
-def _load_result(pc_id: int):
-    conn = connect(DB_PATH)
+def _load_result(pc_id: int, db: Path | None = None):
+    conn = connect(db or ensure_db())
     conn.row_factory = __import__("sqlite3").Row
     try:
         pc = conn.execute(
@@ -238,14 +286,17 @@ def _load_result(pc_id: int):
             r["reasons"] = json.loads(r.pop("reasons_json") or "[]")
         return {"pc": dict(pc), "project": dict(project), "company": dict(company),
                 "rules": rules, "queries": queries, "reviews": reviews,
-                "run": dict(run) if run else None}
+                "run": dict(run) if run else None,
+                # 数据来源口径：mock 演示链路必须在结果页显著标注，
+                # 绝不能与真实官方查询的结论混为一谈
+                "is_mock": bool(run) and run["scenario"] != "real_sources"}
     finally:
         conn.close()
 
 
 @app.get("/checks/{pc_id}")
 def result(request: Request, pc_id: int):
-    data = _load_result(pc_id)
+    data = _load_result(pc_id, ensure_db())
     if data is None:
         raise HTTPException(status_code=404, detail="核查记录不存在")
     import json
@@ -278,7 +329,8 @@ def result(request: Request, pc_id: int):
 @app.get("/evidence/{evidence_id}")
 def view_evidence(evidence_id: int):
     """证据原文查看（仅本地 UI）。路径必须落在证据目录内，防目录穿越。"""
-    conn = connect(DB_PATH)
+    db = ensure_db()
+    conn = connect(db)
     conn.row_factory = __import__("sqlite3").Row
     try:
         row = conn.execute(
@@ -288,7 +340,7 @@ def view_evidence(evidence_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="证据不存在")
     fp = Path(row["file_path"])
-    allowed_root = (evidence_dir_for(DB_PATH)).resolve()
+    allowed_root = (evidence_dir_for(db)).resolve()
     if not fp.resolve().is_relative_to(allowed_root):
         # contains 关系而非前缀（/evil 不应匹配 /ev 前缀）
         raise HTTPException(status_code=400, detail="证据路径非法")
@@ -301,7 +353,7 @@ def view_evidence(evidence_id: int):
 def submit_review(pc_id: int, query_id: int = Form(...), reviewer: str = Form(...),
                   decision: str = Form(...), note: str = Form("")):
     """人工复核：结论是审计记录，不自动改判机器结论（P6 人工复核流）。"""
-    data = _load_result(pc_id)
+    data = _load_result(pc_id, ensure_db())
     if data is None or not data["run"]:
         raise HTTPException(status_code=404, detail="核查记录不存在")
     valid = {q["id"] for q in data["queries"]}
@@ -311,7 +363,7 @@ def submit_review(pc_id: int, query_id: int = Form(...), reviewer: str = Form(..
         raise HTTPException(status_code=400, detail="decision 非法")
     reviewer = _validate_text("复核人", reviewer, _MAX_SHORT, required=True)
     note = _validate_text("复核备注", note, _MAX_NOTE)
-    conn = connect(DB_PATH)
+    conn = connect(ensure_db())
     try:
         conn.execute(
             "INSERT INTO manual_reviews (query_id, run_id, reviewer, decision, note) "
@@ -327,5 +379,5 @@ def submit_review(pc_id: int, query_id: int = Form(...), reviewer: str = Form(..
 @app.post("/checks/{pc_id}/run")
 def rerun(pc_id: int, scenario: str = Form("clean")):
     _validate_scenario(scenario)
-    run_check(DB_PATH, pc_id, scenario=scenario)
+    run_check(ensure_db(), pc_id, scenario=scenario)
     return RedirectResponse(f"/checks/{pc_id}", status_code=303)

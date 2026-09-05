@@ -16,6 +16,28 @@ from ..core.status import Status, report_label
 
 HEADER_FONT = Font(bold=True)
 
+#: 公式注入风险前缀（= + - @ 及制表/回车）：报告内容大量来自第三方页面文本
+#: （企业名称、处罚描述、名单备注…），落单元格前一律加前导单引号强制按文本处理，
+#: 绝不给表格软件/CSV 再导出留下"把文本当公式执行"的机会。
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _source_provenance(run) -> str:
+    """数据来源口径：mock 演示链路绝不能被当成真实官方查询结果使用。"""
+    if not run:
+        return "尚无完整核查运行"
+    if run["scenario"] == "real_sources":
+        return "真实官方数据源查询（real_sources）"
+    return (f"mock 演示链路（场景 {run['scenario']}）：非真实官方查询，"
+            "仅用于流程演示，不得作为核查结论使用")
+
+
+def _cell(value):
+    """单元格消毒：危险前缀前置单引号（Excel/WPS/LibreOffice 均按文本显示，不显示引号本身）。"""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
 _SHEET_TITLES = (
     "封面与汇总", "项目信息", "企业信息", "条款核查结论", "数据源查询日志",
     "发现明细", "证据清单", "人工复核记录", "数据源注册表", "状态口径说明", "免责与合规声明",
@@ -43,11 +65,11 @@ def _latest_run(conn, pc_id):
 
 
 def _write_table(ws, headers, rows):
-    ws.append(headers)
+    ws.append([_cell(h) for h in headers])
     for c in ws[1]:
         c.font = HEADER_FONT
     for r in rows:
-        ws.append(list(r))
+        ws.append([_cell(v) for v in r])
 
 
 def export_excel(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
@@ -98,6 +120,7 @@ def export_excel(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
         ("项目", project["name"]),
         ("企业", f'{company["name"]}' + (f'（{company["uscc"]}）' if company["uscc"] else "")),
         ("核查基准日", project["base_date"]),
+        ("数据来源", _source_provenance(run)),
         ("总体结论", f'{run["overall_status"]} · {report_label(Status(run["overall_status"]))}'
          if run and run["overall_status"] else "尚无完整核查运行"),
         ("业务判断（decision）", run["decision_status"] if run else None),

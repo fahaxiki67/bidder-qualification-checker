@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from ..sources.mock import findings_for
+from ..sources.mock import SCENARIOS, findings_for
 from ..sources.national.base import AdapterOutcome, load_adapter, query_source
 from .db import connect
 from .evidence import save_evidence
@@ -184,16 +184,27 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                 per_source[e.id] = list(out.findings)
                 notes[e.id] = out.note
         else:
+            if scenario not in SCENARIOS:
+                # 场景名拼错必须当场报错：mock 的兜底分支是"无发现"，
+                # 静默降级等于把"查了个寂寞"包装成正式核查结论（审计整改，绝不静默 PASS）
+                raise ValueError(
+                    f"未知演示场景：{scenario}；可选：{'、'.join(sorted(SCENARIOS))}")
             findings = findings_for(scenario, company, project)
             primary = sources[0] if sources else None
             for e in sources:
-                source_status[e.id] = Status.PASS
+                # 演示链路只有主源返回演示数据，其余源本次根本没查——
+                # 绝不能记成 PASS（"查询成功"），否则报告凭空声称全部官方源都查过了
+                if primary is not None and e.id == primary.id:
+                    source_status[e.id] = (Status.ERROR if scenario == "query_error"
+                                           else Status.PASS)
+                else:
+                    source_status[e.id] = Status.NO_DATA
+                    notes[e.id] = "演示链路（mock）：本源本次未实际查询，不得表述为“查询成功”"
                 per_source[e.id] = []
             if primary is not None:
                 per_source[primary.id] = list(findings)
-                if scenario == "query_error":
-                    source_status[primary.id] = Status.ERROR
-                    notes[primary.id] = "演示：数据源查询失败"
+                notes[primary.id] = ("演示：数据源查询失败" if scenario == "query_error"
+                                     else "演示链路（mock）：仅主源返回演示数据，非真实官方查询")
 
         engine = engine_for_terms(enabled_terms)  # Project.terms 真正控制规则（P0.5 §八）
         all_findings = [f for lst in per_source.values() for f in lst]
@@ -237,6 +248,7 @@ def run_check(db_path: str | Path, pc_id: int, scenario: str = "clean",
                         url=actual_url,
                         raw_text=outcome.raw_text,
                         kind="raw_response",
+                        grade=e.evidence_grade,   # 证据等级随源登记，决定能否支持 FAIL
                         key_text=f"HTTP {outcome.http_status} · {len(outcome.raw_text)} 字符",
                     )
                 except Exception as exc:

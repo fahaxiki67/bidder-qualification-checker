@@ -7,6 +7,11 @@
 - 普通罚款不自动等于 FAIL。
 
 P0.5 §八：规则定义来源 app/config/rules.yaml（scope=term/background + clause）；
+审计整改：Project.years_back（“近几年”窗口）此前只是被采集进库、从未参与判断——
+死参数最危险的地方是让人误以为已经生效。现按“只提示、不自动降级”落地：
+窗口外的记录在判定依据里显式标注，由人工对照招标文件期限口径复核，
+机器绝不因超窗口自行把 FAIL 抹成 WARNING（宁可多提示，不可漏否决）。
+
 Project.terms 真正控制哪些资格条款参与正式资格判断——未被本项目启用的条款
 不得形成否决（记 NOT_APPLICABLE 留痕）；background 规则始终评估但只作
 通用背景风险，绝不单独否决项目资格。
@@ -87,6 +92,21 @@ def _fail_or_unknown(cands: list[Finding], reasons: list[str]) -> Status:
     return Status.UNKNOWN
 
 
+def out_of_window(f: Finding, project: Project) -> bool:
+    """该记录是否整体落在项目“近 N 年”窗口之外（参考日 = 截止日，无则发生日）。
+
+    未载明日期的记录不得判定为超窗口（宁可提示，不可据此放宽）。
+    """
+    window_start = project.window_start
+    ref = f.end_date or f.start_date
+    return ref is not None and ref < window_start
+
+
+def _window_note(count: int, project: Project) -> str:
+    return (f"近 {project.years_back} 年窗口（{project.window_start} 起）之外还有 {count} 条记录："
+            "本工具不因超窗口自动降级结论，请人工对照招标文件期限口径复核")
+
+
 def _done(rule_id: str, title: str, statuses, reasons, company) -> RuleResult:
     return RuleResult(
         rule_id=rule_id,
@@ -102,6 +122,7 @@ class BidRestrictionRule:
 
     id = "rule_bid_restriction"
     title = "被省级以上主管部门限制投标/采购活动"
+    KINDS = ("penalty_bid_restriction",)
 
     def evaluate(self, findings, project: Project, company: Company | None = None) -> RuleResult:
         base = project.base_date
@@ -132,6 +153,7 @@ class BusinessStatusRule:
 
     id = "rule_business_status"
     title = "当前处于停产停业或证照吊销/暂扣状态"
+    KINDS = ("penalty_business",)
     REVOCATIONS = {
         "责令停产停业",
         "暂扣营业执照",
@@ -166,6 +188,7 @@ class BankruptcyRule:
 
     id = "rule_bankruptcy"
     title = "进入清算程序或被宣告破产"
+    KINDS = ("bankruptcy_status", "loss_of_capacity_other")
 
     def evaluate(self, findings, project: Project, company: Company | None = None) -> RuleResult:
         statuses: list[Status] = []
@@ -196,6 +219,7 @@ class OwnerBanRule:
 
     id = "rule_owner_ban"
     title = "招标人集团禁入/受限供应商"
+    KINDS = ("owner_ban",)
 
     def evaluate(self, findings, project: Project, company: Company | None = None) -> RuleResult:
         base = project.base_date
@@ -233,6 +257,7 @@ class LicenseValidityRule:
 
     id = "rule_license_validity"
     title = "安全生产许可证/建筑资质当前有效性"
+    KINDS = ("license_surface_expired", "license_authority_status")
     DEAD_STATES = {"过期", "注销", "吊销", "暂扣"}
 
     def evaluate(self, findings, project: Project, company: Company | None = None) -> RuleResult:
@@ -338,6 +363,11 @@ class RuleEngine:
         results: list[RuleResult] = []
         for rule in self.rules:
             out = rule.evaluate(confirmed, project, company)
+            # “近 N 年”窗口透明化：本规则消费到的记录里有超窗口的 → 判定依据里写明
+            oow = [f for f in confirmed
+                   if f.kind in getattr(rule, "KINDS", ()) and out_of_window(f, project)]
+            if oow:
+                out.reasons.append(_window_note(len(oow), project))
             spec = self.specs.get(rule.id)
             results.append(replace(out, scope=spec.scope if spec else None))
         # 本项目未启用的资格条款：显式留痕 NOT_APPLICABLE（不参与正式资格判断）

@@ -8,6 +8,7 @@
     <tr><th style="width:120px">企业</th><td>{{ d.company.name }}{% if d.company.uscc %}（{{ d.company.uscc }}）{% endif %}</td></tr>
     <tr><th>项目</th><td>{{ d.project.name }}{% if d.project.province %} · {{ d.project.province }}{% endif %}{% if d.project.owner_group %} · 集团:{{ d.project.owner_group }}{% endif %} · 基准日 {{ d.project.base_date }}</td></tr>
     <tr><th>总体结论</th><td><span class="badge {{ overall_badge }}">{{ overall }} · {{ overall_label }}</span>{% if manual_required %} <span class="badge badge-warn">需人工复核</span>{% endif %}</td></tr>
+    <tr><th>数据来源</th><td>{% if d.is_mock %}<span class="badge badge-warn">mock 演示链路 · 场景 {{ d.run.scenario }}：非真实官方查询，不得作为核查结论使用</span>{% else %}<span class="badge badge-ok">真实官方数据源查询（real_sources）</span>{% endif %}</td></tr>
     <tr><th>数据获取</th><td><span class="badge {{ data_badge }}">{{ data_status }} · {{ data_label }}</span></td></tr>
     <tr><th>本次批次</th><td style="font-size:12px;color:#66788c;">run_id {{ d.run.run_id }} · {{ d.run.started_at }} 起查{% if d.run.scenario %} · 场景 {{ d.run.scenario }}{% endif %}（仅展示本批次；历史批次保留可溯，不混入当前结论）</td></tr>
   </table>

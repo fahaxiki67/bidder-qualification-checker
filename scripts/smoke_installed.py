@@ -51,7 +51,7 @@ def main() -> int:
         except Exception as exc:
             failures.append(f"模板解析失败: {exc!r}")
 
-    # server 模块导入时会 init_db：指向临时文件，不污染当前目录
+    # server 模块导入无副作用（建库推迟到首次请求）；BQC_DB 仍指向临时文件防止误写
     fd, db_tmp = tempfile.mkstemp(prefix="bqc_smoke_", suffix=".sqlite3")
     os.close(fd)
     os.environ["BQC_DB"] = db_tmp
