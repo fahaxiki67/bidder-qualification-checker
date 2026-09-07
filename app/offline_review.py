@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import difflib
 import hashlib
+import io
 import json
 import math
 import os
@@ -15,6 +16,7 @@ import re
 import stat
 import zipfile
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 from statistics import median, mean, pstdev
 from typing import Any, Iterable
@@ -86,6 +88,12 @@ _TOTAL_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _NOISE_FILE_RE = re.compile(r"^(?:~\$|\.)(?:.*)")
+_FOREIGN_CURRENCY_RE = re.compile(
+    r"(?:[$€£]|\b(?:usd|eur|gbp|jpy|hkd|aud|cad|sgd|krw|inr|rub)\b|"
+    r"美元|欧元|英镑|日元|港币|港元|澳元|加元|新加坡元|韩元|卢布)",
+    re.IGNORECASE,
+)
+_NEGATIVE_AMOUNT_RE = re.compile(r"(?<![\w.])[-−]\s*\d")
 
 _ITEM_NAME_ALIASES = {"项目名称", "清单名称", "项目", "名称", "name", "item", "description", "清单项目"}
 _ITEM_UNIT_ALIASES = {"单位", "计量单位", "unit", "uom"}
@@ -228,7 +236,10 @@ def _parse_amount(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         number = float(value)
         return number if math.isfinite(number) and number >= 0 else None
-    text = str(value).strip().replace("￥", "").replace("¥", "").replace("人民币", "")
+    text = str(value).strip()
+    if _FOREIGN_CURRENCY_RE.search(text):
+        return None
+    text = text.replace("￥", "").replace("¥", "").replace("人民币", "")
     match = _AMOUNT_RE.search(text)
     if not match:
         return None
@@ -251,6 +262,10 @@ def _parse_amount(value: Any) -> float | None:
         if "." in unsigned and ("," in unsigned or "，" in unsigned):
             integer = re.sub(r"[.,，]", "", unsigned[:last])
             normalized = f"{sign}{integer}.{fraction}"
+        elif len(separators) > 1 and len(set(unsigned[index] for index in separators)) == 1 \
+                and len(fraction) == 3 \
+                and all(len(part) == 3 for part in re.split(r"[.,，]", unsigned)[1:]):
+            normalized = sign + re.sub(r"[.,，]", "", unsigned)
         elif len(separators) > 1:
             integer = re.sub(r"[.,，]", "", unsigned[:last])
             normalized = f"{sign}{integer}.{fraction}"
@@ -274,7 +289,10 @@ def _amounts(value: Any) -> list[float]:
     if isinstance(value, (int, float)):
         parsed = _parse_amount(value)
         return [parsed] if parsed is not None else []
-    return [x for x in (_parse_amount(m.group(0)) for m in _AMOUNT_RE.finditer(str(value or ""))) if x is not None]
+    text = str(value or "")
+    if _FOREIGN_CURRENCY_RE.search(text):
+        return []
+    return [x for x in (_parse_amount(m.group(0)) for m in _AMOUNT_RE.finditer(text)) if x is not None]
 
 
 def _relative_diff(a: float, b: float) -> float:
@@ -405,13 +423,36 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
     return quotes, items
 
 
+def _quote_parse_warnings(text: str) -> list[dict]:
+    """保留负报价/外币报价的可追溯缺口，不把它们静默当作无报价。"""
+    warnings = []
+    for index, line in enumerate(text.splitlines(), 1):
+        label_match = _LABEL_RE.search(line)
+        if not label_match:
+            continue
+        tail = line[label_match.end():]
+        if _NEGATIVE_AMOUNT_RE.search(tail):
+            warnings.append({
+                "locator": f"第{index}行",
+                "reason": "报价金额为负值，未纳入报价比较",
+                "raw": line[:500],
+            })
+        elif _FOREIGN_CURRENCY_RE.search(tail) and _AMOUNT_RE.search(tail):
+            warnings.append({
+                "locator": f"第{index}行",
+                "reason": "报价币种疑似为非人民币，未纳入报价比较",
+                "raw": line[:500],
+            })
+    return warnings
+
+
 def _rows_from_csv(text: str) -> tuple[list[list[str]], str]:
     sample = text[:4096]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=",\t;|，；")
     except csv.Error:
         dialect = csv.excel
-    rows = list(csv.reader(text.splitlines(), dialect))[:MAX_ROWS]
+    rows = list(islice(csv.reader(io.StringIO(text, newline=""), dialect), MAX_ROWS))
     return rows, dialect.delimiter
 
 
@@ -454,10 +495,12 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
         for pos in label_positions:
             label_match = _LABEL_RE.search(cells[pos])
             tail = cells[pos][label_match.end():] if label_match else ""
-            candidates = _amounts(tail) or [n for cell in cells[pos + 1:] for n in _amounts(cell)]
-            if candidates:
+            candidates = _amounts(tail) if tail else (
+                _amounts(cells[pos + 1]) if pos + 1 < len(cells) else []
+            )
+            if len(candidates) == 1:
                 label = label_match.group(1) if label_match else cells[pos]
-                quotes.append(_quote(label, candidates[-1], source, f"{prefix}第{row_index}行",
+                quotes.append(_quote(label, candidates[0], source, f"{prefix}第{row_index}行",
                                      " | ".join(cells), _quote_kind(label)))
         _merge_metadata(metadata, _metadata_from_pairs(zip(cells[::2], cells[1::2])))
 
@@ -525,7 +568,9 @@ def _json_walk(value: Any, source: str, path: str = "$", quotes: list | None = N
     if isinstance(value, dict):
         _merge_metadata(metadata, _metadata_from_pairs(value.items()))
         name = _dict_field(value, _ITEM_NAME_ALIASES)
-        amount = _dict_field(value, _ITEM_AMOUNT_ALIASES | _ITEM_UNIT_PRICE_ALIASES)
+        amount = _dict_field(value, _ITEM_AMOUNT_ALIASES)
+        if amount is None:
+            amount = _dict_field(value, _ITEM_UNIT_PRICE_ALIASES)
         parsed_amount = _parse_amount(amount)
         if name is not None and parsed_amount is not None:
             unit = _dict_field(value, _ITEM_UNIT_ALIASES)
@@ -622,50 +667,78 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
         workbook = load_workbook(path, read_only=True, data_only=True)
         sheet_summaries = []
         text_parts = []
+        read_cell_count = 0
+        read_truncated = False
         try:
             for sheet in workbook.worksheets:
                 rows = []
-                for row in sheet.iter_rows(values_only=True):
-                    rows.append(list(row))
-                    if len(rows) >= MAX_ROWS:
-                        break
+                declared_rows = max(1, int(sheet.max_row or 1))
+                declared_columns = max(1, int(sheet.max_column or 1))
+                remaining_cells = MAX_XLSX_AUDIT_CELLS - read_cell_count
+                if remaining_cells > 0:
+                    read_columns = min(declared_columns, remaining_cells)
+                    read_rows = min(
+                        declared_rows, MAX_ROWS,
+                        max(1, remaining_cells // read_columns),
+                    )
+                    sheet_truncated = (
+                        read_rows < declared_rows or read_columns < declared_columns
+                        or (read_rows == MAX_ROWS and declared_rows > MAX_ROWS)
+                    )
+                    for row in sheet.iter_rows(
+                            max_row=read_rows, max_col=read_columns, values_only=True):
+                        values = list(row)
+                        rows.append(values)
+                        read_cell_count += len(values)
+                    read_truncated = read_truncated or sheet_truncated
+                else:
+                    sheet_truncated = True
+                    read_truncated = True
                 q, i, s, row_metadata = _rows_quotes(rows, source, sheet=sheet.title)
                 quotes.extend(q)
                 items.extend(i)
                 _merge_metadata(metadata, row_metadata)
-                sheet_summaries.append({"name": sheet.title, **s})
+                sheet_summaries.append({"name": sheet.title, "read_truncated": sheet_truncated, **s})
                 text_parts.append(f"[SHEET:{sheet.title}]\n" + "\n".join(" | ".join("" if x is None else str(x) for x in row) for row in rows))
             # read_only 模式适合取显示值，但不会保留隐藏行、筛选和公式类型；
-            # 用一次受文件大小限制的普通读取补充审计元数据，不替代公式计算。
-            audit_workbook = load_workbook(path, read_only=False, data_only=False)
+            # 只有显示值读取未触及审计上限时，才做一次普通读取补充元数据；
+            # 否则不再为稀疏超宽/超长工作表加载完整对象。
             audit_cell_count = 0
-            audit_truncated = False
-            try:
-                for summary in sheet_summaries:
-                    audit_sheet = audit_workbook[summary["name"]]
-                    summary["hidden_row_count"] = sum(
-                        1 for dimension in audit_sheet.row_dimensions.values() if dimension.hidden
-                    )
-                    summary["filtered_range"] = audit_sheet.auto_filter.ref
-                    summary["sheet_state"] = audit_sheet.sheet_state
-                    summary["merged_range_count"] = len(audit_sheet.merged_cells.ranges)
-                    formula_count = 0
-                    for row in audit_sheet.iter_rows():
-                        for cell in row:
-                            if audit_cell_count >= MAX_XLSX_AUDIT_CELLS:
-                                audit_truncated = True
+            audit_truncated = read_truncated
+            if not read_truncated:
+                audit_workbook = load_workbook(path, read_only=False, data_only=False)
+                try:
+                    for summary in sheet_summaries:
+                        audit_sheet = audit_workbook[summary["name"]]
+                        summary["hidden_row_count"] = sum(
+                            1 for dimension in audit_sheet.row_dimensions.values() if dimension.hidden
+                        )
+                        summary["filtered_range"] = audit_sheet.auto_filter.ref
+                        summary["sheet_state"] = audit_sheet.sheet_state
+                        summary["merged_range_count"] = len(audit_sheet.merged_cells.ranges)
+                        formula_count = 0
+                        for row in audit_sheet.iter_rows():
+                            for cell in row:
+                                if audit_cell_count >= MAX_XLSX_AUDIT_CELLS:
+                                    audit_truncated = True
+                                    break
+                                audit_cell_count += 1
+                                if cell.data_type == "f":
+                                    formula_count += 1
+                            if audit_truncated:
                                 break
-                            audit_cell_count += 1
-                            if cell.data_type == "f":
-                                formula_count += 1
-                        if audit_truncated:
-                            break
-                    summary["formula_count"] = formula_count
-                    summary["audit_truncated"] = audit_truncated
-            finally:
-                audit_workbook.close()
-            for summary in sheet_summaries:
-                summary.setdefault("audit_truncated", audit_truncated)
+                        summary["formula_count"] = formula_count
+                        summary["audit_truncated"] = audit_truncated
+                finally:
+                    audit_workbook.close()
+            else:
+                for summary in sheet_summaries:
+                    summary["hidden_row_count"] = None
+                    summary["filtered_range"] = None
+                    summary["sheet_state"] = None
+                    summary["merged_range_count"] = None
+                    summary["formula_count"] = None
+                    summary["audit_truncated"] = True
             properties = workbook.properties
             _merge_metadata(metadata, _metadata_from_pairs((("author", properties.creator), ("lastModifiedBy", properties.lastModifiedBy))))
         finally:
@@ -692,6 +765,9 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
         "structure": structure,
         "metadata_fields": sorted(metadata),
     }
+    quote_warnings = _quote_parse_warnings(text)
+    if quote_warnings:
+        public["parse_warnings"] = quote_warnings
     return public, compare_text, _dedupe_quotes(quotes), _dedupe_items(items), structure, metadata, None
 
 
@@ -819,12 +895,14 @@ def _compare_text_and_structure(bidders: list[dict], signals: list[dict]) -> Non
                 [{"bidder": left, "files": a["files"]}, {"bidder": right, "files": b["files"]}], level="中"))
         for file_a in a["_internal_files"]:
             for file_b in b["_internal_files"]:
-                if file_a["public"]["sha256"] == file_b["public"]["sha256"]:
+                if (file_a["public"]["sha256"] == file_b["public"]["sha256"]
+                        and min(len(file_a["text"]), len(file_b["text"])) >= THRESHOLDS["min_text_chars"]):
                     signals.append(_new_signal(
                         "TEXT_EXACT_MATCH", "投标文件字节内容完全一致", f"{left} ↔ {right}",
                         "两份文件 SHA-256 一致，表明字节内容相同；仍需核对模板、招标文件统一附件及合法共享文件来源。",
                         [{"bidder": left, **file_a["public"]}, {"bidder": right, **file_b["public"]}], level="高"))
-                elif file_a["public"].get("normalized_sha256") == file_b["public"].get("normalized_sha256") and len(file_a["text"]) >= THRESHOLDS["min_text_chars"]:
+                elif (file_a["public"].get("normalized_sha256") == file_b["public"].get("normalized_sha256")
+                      and min(len(file_a["text"]), len(file_b["text"])) >= THRESHOLDS["min_text_chars"]):
                     signals.append(_new_signal(
                         "TEXT_EXACT_MATCH", "投标文件去空白文本内容一致", f"{left} ↔ {right}",
                         "两份文件去除空白后的文本摘要一致，需人工排除统一模板、公告附件或同一原始文件合法复用。",
@@ -873,6 +951,10 @@ def _relation_rows(path: Path, raw: bytes | None = None) -> tuple[list[dict], st
             data = json.loads(text)
         except json.JSONDecodeError as exc:
             return [], f"JSON 解析失败：{exc.msg}"
+        try:
+            _json_walk(data, str(path))
+        except ValueError as exc:
+            return [], f"JSON 解析受限：{exc}"
         if isinstance(data, dict):
             data = data.get("relations", data.get("clues", data.get("data", [data])))
         if not isinstance(data, list):
@@ -912,6 +994,17 @@ def _add_relation_signals(path: Path | None, bidder_names: set[str], signals: li
     result["relation_source"] = {
         "path": str(path), "size_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()
     }
+    observed_bytes = result["scan"]["total_bytes"] + len(raw)
+    if observed_bytes > MAX_INPUT_BYTES:
+        result["scan"]["truncated"] = True
+        result["scan"]["budget_errors"].append({
+            "kind": "bytes", "limit": MAX_INPUT_BYTES, "observed": observed_bytes,
+        })
+        result["scan_errors"].append({
+            "path": str(path), "error": f"输入资料总字节数超过限制：{MAX_INPUT_BYTES}"
+        })
+        return
+    result["scan"]["total_bytes"] = observed_bytes
     rows, error = _relation_rows(path, raw)
     if error:
         result["parse_errors"].append({"path": str(path), "error": error})
@@ -959,7 +1052,20 @@ def _scan_input_files(root: Path, result: dict, excluded_paths: set[Path] | None
             "error": f"输入目录超过{label}限制：{limit}",
         })
 
-    for directory, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+    def record_walk_error(exc: OSError) -> None:
+        raw_path = getattr(exc, "filename", None)
+        path = Path(raw_path) if raw_path else root
+        try:
+            display_path = _safe_rel(path, root)
+        except (TypeError, ValueError):
+            display_path = str(path)
+        result["scan_errors"].append({
+            "path": display_path,
+            "error": f"目录扫描失败：{exc}",
+        })
+
+    for directory, dirnames, filenames in os.walk(
+            root, topdown=True, followlinks=False, onerror=record_walk_error):
         directory_path = Path(directory)
         for dirname in sorted(dirnames):
             candidate = directory_path / dirname
@@ -1025,6 +1131,14 @@ def _load_bidder_files(root: Path, result: dict, excluded_paths: set[Path] | Non
                 public = _error_file_public(path, relative)
                 text, q, i, structure, file_meta, error = "", [], [], {}, {}, str(exc)
             public_files.append(public)
+            for warning in public.get("parse_warnings", []):
+                result["parse_errors"].append({
+                    "path": relative,
+                    "bidder": name,
+                    "locator": warning["locator"],
+                    "error": warning["reason"],
+                    "raw": warning["raw"],
+                })
             if error and public.get("parse_status") != "UNSUPPORTED":
                 parse_error = {"path": relative, "bidder": name, "error": error}
                 for key in ("size_bytes", "sha256"):

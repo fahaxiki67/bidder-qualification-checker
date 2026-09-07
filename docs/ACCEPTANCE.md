@@ -60,7 +60,7 @@
 | 电子/文件相似 | E-01、S-01、S-02、S-03、S-04 | E-01 仅电子字段；S-04 仅使用 `COMPARABLE` 的 `comparison_key` |
 | 主体/关系线索 | P-01、P-02、P-03 | 人员重合和亲属关系只形成人工复核信号 |
 
-全量自动化测试当前为 `303 passed, 1 skipped`；跳过项是 Windows 当前进程无创建符号链接权限，
+全量自动化测试当前为 `309 passed, 1 skipped`；跳过项是 Windows 当前进程无创建符号链接权限，
 不是业务断言失败。新增集成测试用合成 CSV 与 `relations.csv` 从主流程覆盖 F-05/F-06/S-04/P-02/P-03，
 但不等同于真实同项目投标资料验证。
 
@@ -68,7 +68,7 @@
 - [ ] Windows 安装包（P8）
 - [x] macOS 构建包（P9：CI arm64 zip=bqc+.command 启动脚本；本机实测+CI 产物复验）
 - [x] README
-- [x] 测试结果（每轮 PROGRESS.md 记录；当前全量 303 passed、1 skipped，CI 六 job+release 测试门；双平台验收操作单 docs/UAT.md）
+- [x] 测试结果（每轮 PROGRESS.md 记录；当前全量 309 passed、1 skipped，CI 六 job+release 测试门；双平台验收操作单 docs/UAT.md）
 - [ ] 已支持数据源清单（真实联调后才有"已支持"）
 - [x] 未支持数据源清单（即上表）
 - [x] 地区插件开发说明（docs/PLUGINS.md）

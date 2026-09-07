@@ -48,6 +48,20 @@ def test_review_directory_excludes_relation_file_and_emits_risk_signals(tmp_path
     assert result["summary"]["manual_review_required"] is True
 
 
+def test_relation_json_respects_depth_budget(tmp_path, monkeypatch):
+    relation = tmp_path / "relations.json"
+    relation.write_text(
+        json.dumps({"relations": [{"bidder_a": "甲", "bidder_b": "乙", "relation": "相同"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(offline_review, "MAX_JSON_DEPTH", 2)
+
+    result = review_directory(tmp_path, relations=relation)
+
+    assert result["summary"]["parse_error_count"] == 1
+    assert "JSON 解析受限" in result["parse_errors"][0]["error"]
+
+
 def test_review_directory_integrates_new_pattern_signals_and_control_quote(tmp_path):
     item_rows = [
         "项目名称,规格,单位,数量,单价,合价",
@@ -95,6 +109,21 @@ def test_review_directory_integrates_new_pattern_signals_and_control_quote(tmp_p
         assert len(control_quotes) == 1
         assert control_quotes[0]["label"] == "招标控制价"
         assert bidder["primary_quote"]["kind"] != control_quotes[0]["kind"]
+
+
+def test_csv_quote_uses_first_amount_before_tax_rate(tmp_path):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.csv").write_text("投标报价,1000,税率,13\n", encoding="utf-8")
+    ambiguous = tmp_path / "乙"
+    ambiguous.mkdir()
+    (ambiguous / "报价.csv").write_text("bid_price,tax_rate,13,100000\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    bidders = {bidder["name"]: bidder for bidder in result["bidders"]}
+    assert bidders["甲"]["primary_quote"]["value"] == 1000
+    assert bidders["乙"]["primary_quote"] is None
 
 
 def test_review_parses_json_and_xlsx_with_traceable_hashes(tmp_path):
@@ -200,6 +229,51 @@ def test_json_composite_total_is_not_parsed_as_scalar_quote(tmp_path):
     assert bidder_result["line_items"][0]["comparability_status"] == "COMPARABLE"
 
 
+def test_quote_parser_keeps_invalid_currency_and_negative_values_traceable(tmp_path):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.csv").write_text(
+        "项目名称,规格,单位,合价\n"
+        "土方,一般土方,m³,100\n"
+        "投标报价,-5000\n"
+        "报价金额,100 USD\n",
+        encoding="utf-8",
+    )
+
+    result = review_directory(tmp_path)
+
+    assert result["bidders"][0]["primary_quote"] is None
+    assert result["bidders"][0]["quotes"] == []
+    errors = result["parse_errors"]
+    assert any("负值" in error["error"] for error in errors)
+    assert any("非人民币" in error["error"] for error in errors)
+
+
+def test_short_identical_files_do_not_create_exact_match_signal(tmp_path):
+    for name in ("甲", "乙"):
+        bidder = tmp_path / name
+        bidder.mkdir()
+        (bidder / "空.txt").write_text("", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    assert not any(signal["code"] == "TEXT_EXACT_MATCH" for signal in result["signals"])
+
+
+def test_json_item_prefers_total_over_unit_price(tmp_path):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.json").write_text(
+        json.dumps({"items": [{"项目名称": "土方", "单位": "m³", "规格": "一般土方",
+                                "单价": 12, "合价": 120}]}),
+        encoding="utf-8",
+    )
+
+    result = review_directory(tmp_path)
+
+    assert result["bidders"][0]["line_items"][0]["amount"] == 120
+
+
 def test_scan_skips_and_records_symlink(tmp_path):
     target = tmp_path / "outside.txt"
     target.write_text("投标报价,100", encoding="utf-8")
@@ -257,6 +331,24 @@ def test_xlsx_zip_guard_runs_before_openpyxl(tmp_path, monkeypatch):
 
     assert result["summary"]["parse_error_count"] == 1
     assert "XLSX 压缩包成员" in result["parse_errors"][0]["error"]
+
+
+def test_xlsx_read_pass_respects_audit_cell_budget(tmp_path, monkeypatch):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["项目名称", "合价"])
+    sheet.append(["土方", 100])
+    workbook.save(bidder / "报价.xlsx")
+    monkeypatch.setattr(offline_review, "MAX_XLSX_AUDIT_CELLS", 2)
+
+    result = review_directory(tmp_path)
+    sheet_meta = result["bidders"][0]["files"][0]["structure"]["sheets"][0]
+
+    assert sheet_meta["read_truncated"] is True
+    assert sheet_meta["audit_truncated"] is True
+    assert sheet_meta["formula_count"] is None
 
 
 def test_unsupported_and_broken_files_are_not_silently_clean(tmp_path):

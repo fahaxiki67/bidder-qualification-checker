@@ -108,8 +108,11 @@ def uniform_discount_signals(bidders: list[dict]) -> list[dict]:
         primary = bidder.get("primary_quote")
         if not primary or primary.get("kind") == "control":
             continue
-        control = next((q for q in bidder.get("quotes", []) if q.get("kind") == "control"), None)
-        if not control or not control.get("value"):
+        controls = [q for q in bidder.get("quotes", []) if q.get("kind") == "control"]
+        if not controls or len({float(q["value"]) for q in controls}) != 1:
+            continue
+        control = controls[0]
+        if not control.get("value"):
             continue
         # 主报价与控制价完全相同通常表示只解析到了控制价，不能当作投标报价。
         if float(primary.get("value")) == float(control.get("value")):

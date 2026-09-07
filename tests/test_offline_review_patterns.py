@@ -77,6 +77,12 @@ def test_uniform_discount_rate_flags_f06_and_skips_control_only_bidders():
     assert _codes(signals) == ["UNIFORM_DISCOUNT_RATE"]
     assert {e["bidder"] for e in signals[0]["evidence"]} == {"甲", "乙"}
 
+    conflict = [_bidder("甲", 90_000, control=100_000),
+                _bidder("乙", 90_000, control=100_000)]
+    conflict[0]["quotes"].append({"label": "最高限价", "value": 101_000,
+                                   "source": "", "locator": "", "raw": "", "kind": "control"})
+    assert uniform_discount_signals(conflict) == []
+
 
 def test_line_item_set_match_flags_s04_only_above_common_floor():
     names = [f"清单项{i}" for i in range(9)]
