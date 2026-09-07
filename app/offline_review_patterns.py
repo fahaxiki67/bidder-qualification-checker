@@ -34,6 +34,7 @@ RULE_IDS = {
     "PERSON_OVERLAP": "P-02",
     "KINSHIP_RELATION": "P-03",
     "PAYMENT_ACCOUNT_MATCH": "E-02",
+    "PERSON_TABLE_OVERLAP": "P-04",
 }
 
 LEGAL_BASIS = {
@@ -44,6 +45,7 @@ LEGAL_BASIS = {
     "PERSON_OVERLAP": "《招标投标法实施条例》第40条第3项关于项目管理成员同一人的法定边界；扩展人员字段仅作线索",
     "KINSHIP_RELATION": "《招标投标法实施条例》第34条关于单位负责人同一/控股或管理关系的边界；亲属关系本身不等同法定关系",
     "PAYMENT_ACCOUNT_MATCH": "《招标投标法实施条例》第40条第6项关于保证金从同一单位或个人账户转出的法定边界；资料字段相同不等同转出事实",
+    "PERSON_TABLE_OVERLAP": "《招标投标法实施条例》第34条第2款关于单位负责人为同一人或存在控股、管理关系的边界；人员任职重合仅作关联线索",
 }
 
 # 人员类元数据字段：跨投标人相同值归入 P-02 主体线索，而不是 E-01 电子痕迹。
@@ -313,20 +315,84 @@ def payment_account_signals(bidders: list[dict]) -> list[dict]:
     return signals
 
 
+# 人员长表（企查查/公示导出风格）列别名：人员 + 企业（+ 可选职务）。
+def _norm_label_value(value: Any) -> str:
+    return re.sub(r"[\s_\-]", "", str(value or "")).lower()
+
+
+_PERSON_TABLE_KEYS = {
+    "person": {"人员", "姓名", "人员姓名", "高管姓名", "股东姓名", "法定代表人姓名",
+               "name", "person", "personname"},
+    "company": {"公司", "企业", "企业名称", "公司名称", "任职企业", "关联企业",
+                "company", "companyname", "股东名称"},
+    "role": {"职务", "职位", "角色", "高管类型", "股东类型", "任职类型",
+             "role", "position", "title"},
+}
+_PERSON_TABLE_NORM = {
+    kind: {_norm_label_value(key) for key in keys}
+    for kind, keys in _PERSON_TABLE_KEYS.items()
+}
+
+
+def person_table_overlap_signals(result: dict, bidder_names: set[str]) -> list[dict]:
+    """P-04：用户提供的人员长表（企查查等导出）中同一人任职多家投标人。
+
+    直接识别 relations 文件里的「人员+企业(+职务)」长表行，不要求用户预先
+    整理成配对表；同一人命中至少两家投标人名称（精确匹配）才提示。
+    """
+    by_person: dict[str, dict[str, list[str]]] = {}
+    for clue in result.get("relation_clues", []):
+        row = clue.get("raw")
+        if not isinstance(row, dict):
+            continue
+        normed = {_norm_label_value(k): v for k, v in row.items()}
+        if any(k in normed for k in ("biddera", "companya", "namea")):
+            continue  # 配对表行归 P-01/P-03 处理
+        person = next((str(normed[k]).strip() for k in _PERSON_TABLE_NORM["person"]
+                       if k in normed and str(normed[k] or "").strip()), None)
+        company = next((str(normed[k]).strip() for k in _PERSON_TABLE_NORM["company"]
+                        if k in normed and str(normed[k] or "").strip()), None)
+        role = next((str(normed[k]).strip() for k in _PERSON_TABLE_NORM["role"]
+                     if k in normed and str(normed[k] or "").strip()), "")
+        if not person or len(person) < 2 or not company:
+            continue
+        by_person.setdefault(person, {}).setdefault(company, set()).add(role)
+    signals: list[dict] = []
+    for person in sorted(by_person):
+        companies = by_person[person]
+        hit = sorted(c for c in companies if c in bidder_names)
+        if len(hit) < 2:
+            continue
+        roles = sorted(r for c in hit for r in companies[c] if r)
+        signals.append(_signal(
+            "PERSON_TABLE_OVERLAP", "人员长表显示同一人任职多家投标人", person,
+            f"用户提供的人员资料中，{person} 同时出现在 {len(hit)} 家投标人"
+            f"（{'、'.join(hit)}）的任职记录里"
+            + (f"，职务/角色：{'、'.join(roles)}" if roles else "")
+            + "；任职重合可能来自兼职工程师、挂名登记或资料误录，须以工商登记、"
+              "社保与劳动合同等有权资料核实人员真实归属。",
+            [{"person": person,
+              "companies": [{"company": c, "roles": sorted(companies[c])} for c in hit]}],
+            level="高"))
+    return signals
+
+
 def apply(result: dict, bidders: list[dict], signals: list[dict]) -> None:
     """把本模块全部规则追加进 review 信号列表（review_directory 接线入口）。"""
+    names = {b["name"] for b in bidders}
     signals.extend(quote_pattern_signals(bidders))
     signals.extend(uniform_discount_signals(bidders))
     signals.extend(line_item_set_signals(bidders))
     signals.extend(shared_block_signals(bidders))
     signals.extend(person_overlap_signals(bidders))
     signals.extend(payment_account_signals(bidders))
-    signals.extend(kinship_signals(result, {b["name"] for b in bidders}))
+    signals.extend(kinship_signals(result, names))
+    signals.extend(person_table_overlap_signals(result, names))
 
 
 __all__ = [
     "PATTERN_THRESHOLDS", "RULE_IDS", "PERSON_FIELDS",
     "quote_pattern_signals", "uniform_discount_signals", "line_item_set_signals",
     "shared_block_signals", "person_overlap_signals", "payment_account_signals",
-    "kinship_signals", "apply",
+    "kinship_signals", "person_table_overlap_signals", "apply",
 ]

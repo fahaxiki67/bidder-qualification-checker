@@ -8,6 +8,7 @@ from app.offline_review_patterns import (
     line_item_set_signals,
     payment_account_signals,
     person_overlap_signals,
+    person_table_overlap_signals,
     quote_pattern_signals,
     shared_block_signals,
     uniform_discount_signals,
@@ -179,6 +180,52 @@ def test_payment_account_match_flags_e02_with_masked_evidence():
                                                        "value": "6217009988776655443"}]}),
     ]
     assert payment_account_signals(distinct) == []
+
+
+def test_person_table_overlap_flags_p04_for_shared_person():
+    def _row(number, raw):
+        return {"row": number, "bidder_a": "", "bidder_b": "",
+                "relation": "用户提供的关联关系线索", "source": "未注明", "raw": raw}
+
+    result = {"relation_clues": [
+        _row(2, {"姓名": "张三", "企业名称": "甲公司", "职务": "监事"}),
+        _row(3, {"姓名": "张三", "企业名称": "乙公司", "职务": "董事"}),
+        _row(4, {"姓名": "李四", "企业名称": "甲公司", "职务": "经理"}),
+        {"row": 5, "bidder_a": "甲公司", "bidder_b": "乙公司",
+         "relation": "法定代表人相同", "source": "本地登记资料",
+         "raw": {"bidder_a": "甲公司", "bidder_b": "乙公司"}},
+    ]}
+    signals = person_table_overlap_signals(result, {"甲公司", "乙公司"})
+    assert _codes(signals) == ["PERSON_TABLE_OVERLAP"]
+    assert signals[0]["rule_id"] == "P-04"
+    assert signals[0]["level"] == "高"
+    assert signals[0]["evidence"][0]["person"] == "张三"
+    assert {c["company"] for c in signals[0]["evidence"][0]["companies"]} == {"甲公司", "乙公司"}
+    assert "监事" in json.dumps(signals[0]["evidence"], ensure_ascii=False)
+
+    # 配对表行归 P-01/P-03，不触发 P-04；单家命中或单字符人名不触发。
+    paired_only = {"relation_clues": [result["relation_clues"][3]]}
+    assert person_table_overlap_signals(paired_only, {"甲公司", "乙公司"}) == []
+    single_hit = {"relation_clues": [result["relation_clues"][2]]}
+    assert person_table_overlap_signals(single_hit, {"甲公司", "乙公司"}) == []
+
+
+def test_review_directory_accepts_qichacha_style_person_table(tmp_path):
+    from app.offline_review import review_directory
+
+    for name in ("甲公司", "乙公司"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "报价.csv").write_text(
+            f"投标报价,{100000 if name == '甲公司' else 100300}\n", encoding="utf-8")
+    rel = tmp_path / "企查查导出.csv"
+    rel.write_text(
+        "姓名,企业名称,职务\n张三,甲公司,监事\n张三,乙公司,董事\n",
+        encoding="utf-8")
+
+    result = review_directory(tmp_path, relations=rel)
+    codes = {s["code"] for s in result["signals"]}
+    assert "PERSON_TABLE_OVERLAP" in codes
+    assert all(s["auto_conclusion"] is False for s in result["signals"])
 
 
 def test_apply_aggregates_all_rules_and_keeps_manual_boundary():
