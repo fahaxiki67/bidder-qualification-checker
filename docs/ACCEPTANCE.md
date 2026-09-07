@@ -56,19 +56,19 @@
 
 | 类别 | 已启用规则 | 接线/边界 |
 |---|---|---|
-| 报价模式 | F-01、F-02、F-03、F-04、F-05、F-06 | F-06 仅使用 `kind=control` 的招标控制价/最高限价/控制价；控制价不成为主报价 |
+| 报价模式 | F-01、F-02、F-03、F-04、F-05、F-06、F-07 | F-06 仅使用 `kind=control` 的招标控制价/最高限价/控制价；F-07 只补充 0.5%~2% 接近带；控制价不成为主报价 |
 | 电子/文件相似 | E-01、E-02、S-01、S-02、S-03、S-04、S-05 | E-01 仅电子字段；E-02 账户证据脱敏且仅作人工复核线索；S-04 仅使用 `COMPARABLE` 的 `comparison_key`；S-05 不写入共享块原文 |
-| 主体/关系线索 | P-01、P-02、P-03 | 人员重合和亲属关系只形成人工复核信号 |
+| 主体/关系线索 | P-01、P-02、P-03、P-04 | 人员重合、亲属关系和人员长表任职重合只形成人工复核信号 |
 
-全量自动化测试当前为 `317 passed, 1 skipped`；跳过项是 Windows 当前进程无创建符号链接权限，
-不是业务断言失败。新增集成测试用合成 CSV 与 `relations.csv` 从主流程覆盖 F-05/F-06/E-02/S-04/P-02/P-03，
+全量自动化测试当前为 `325 passed, 1 skipped`；跳过项是 Windows 当前进程无创建符号链接权限，
+不是业务断言失败。新增集成测试用合成 CSV、XLSX、JSON、PDF 与 `relations.csv` 从主流程覆盖 F-05/F-06/F-07/E-02/S-04/P-02/P-03/P-04，
 但不等同于真实同项目投标资料验证。
 
 - [x] 完整源码（随阶段推进持续更新）
 - [x] Windows 安装包（P8：CI package-windows；v0.9.0 Release 已挂载便携 zip）
 - [x] macOS 构建包（P9：CI arm64 zip=bqc+.command 启动脚本；本机实测+CI 产物复验）
 - [x] README
-- [x] 测试结果（每轮 PROGRESS.md 记录；当前全量 317 passed、1 skipped，CI 六 job+release 测试门；双平台验收操作单 docs/UAT.md）
+- [x] 测试结果（每轮 PROGRESS.md 记录；当前全量 325 passed、1 skipped，CI 六 job+release 测试门；双平台验收操作单 docs/UAT.md）
 - [ ] 已支持数据源清单（真实联调后才有"已支持"）
 - [x] 未支持数据源清单（即上表）
 - [x] 地区插件开发说明（docs/PLUGINS.md）

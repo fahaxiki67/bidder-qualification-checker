@@ -1,4 +1,4 @@
-"""报价规律与主体关联的增量预警规则（F-05/F-06/S-04/S-05/P-02/P-03）。
+"""报价规律与主体关联的增量预警规则（F-05~F-07/S-04/S-05/P-02~P-04/E-02）。
 
 本模块是 offline_review 的增量规则层：输入已解析的投标人数据，输出与
 offline_review._new_signal 同构的信号字典。它不访问网络、不修改输入文件、
@@ -24,6 +24,8 @@ PATTERN_THRESHOLDS = {
     "shared_block_size": 200,
     "min_shared_blocks": 3,
     "shared_block_coverage": 0.10,
+    # F-07 二档：0.5%~2% 的接近带。真实陪标报价差异常落在该区间（≤0.5% 归 F-01 高档）。
+    "near_quote_secondary_relative_diff": 0.02,
 }
 
 RULE_IDS = {
@@ -35,6 +37,7 @@ RULE_IDS = {
     "KINSHIP_RELATION": "P-03",
     "PAYMENT_ACCOUNT_MATCH": "E-02",
     "PERSON_TABLE_OVERLAP": "P-04",
+    "QUOTE_NEAR_BAND": "F-07",
 }
 
 LEGAL_BASIS = {
@@ -46,6 +49,7 @@ LEGAL_BASIS = {
     "KINSHIP_RELATION": "《招标投标法实施条例》第34条关于单位负责人同一/控股或管理关系的边界；亲属关系本身不等同法定关系",
     "PAYMENT_ACCOUNT_MATCH": "《招标投标法实施条例》第40条第6项关于保证金从同一单位或个人账户转出的法定边界；资料字段相同不等同转出事实",
     "PERSON_TABLE_OVERLAP": "《招标投标法实施条例》第34条第2款关于单位负责人为同一人或存在控股、管理关系的边界；人员任职重合仅作关联线索",
+    "QUOTE_NEAR_BAND": "《招标投标法实施条例》第40条第4项关于投标报价呈规律性差异的关联线索；接近带为工具筛查参数，不构成推定",
 }
 
 # 人员类元数据字段：跨投标人相同值归入 P-02 主体线索，而不是 E-01 电子痕迹。
@@ -320,6 +324,18 @@ def _norm_label_value(value: Any) -> str:
     return re.sub(r"[\s_\-]", "", str(value or "")).lower()
 
 
+RELATION_LEFT_ALIASES = frozenset({
+    "bidder_a", "company_a", "party_a", "投标人a", "企业a", "甲方", "name_a",
+})
+RELATION_RIGHT_ALIASES = frozenset({
+    "bidder_b", "company_b", "party_b", "投标人b", "企业b", "乙方", "name_b",
+})
+RELATION_PAIR_KEYS = frozenset(
+    _norm_label_value(key)
+    for key in RELATION_LEFT_ALIASES | RELATION_RIGHT_ALIASES
+)
+
+
 _PERSON_TABLE_KEYS = {
     "person": {"人员", "姓名", "人员姓名", "高管姓名", "股东姓名", "法定代表人姓名",
                "name", "person", "personname"},
@@ -334,29 +350,37 @@ _PERSON_TABLE_NORM = {
 }
 
 
+def _person_table_values(normed: dict[str, Any], kind: str) -> list[str]:
+    """按固定顺序收集字段别名；同值去重，冲突值由调用方保守跳过。"""
+    values = {
+        str(normed[key]).strip()
+        for key in sorted(_PERSON_TABLE_NORM[kind])
+        if key in normed and str(normed[key] or "").strip()
+        and not isinstance(normed[key], (dict, list, tuple, set))
+    }
+    return sorted(values)
+
+
 def person_table_overlap_signals(result: dict, bidder_names: set[str]) -> list[dict]:
     """P-04：用户提供的人员长表（企查查等导出）中同一人任职多家投标人。
 
     直接识别 relations 文件里的「人员+企业(+职务)」长表行，不要求用户预先
     整理成配对表；同一人命中至少两家投标人名称（精确匹配）才提示。
     """
-    by_person: dict[str, dict[str, list[str]]] = {}
+    by_person: dict[str, dict[str, set[str]]] = {}
     for clue in result.get("relation_clues", []):
         row = clue.get("raw")
         if not isinstance(row, dict):
             continue
         normed = {_norm_label_value(k): v for k, v in row.items()}
-        if any(k in normed for k in ("biddera", "companya", "namea")):
+        if any(k in normed for k in RELATION_PAIR_KEYS):
             continue  # 配对表行归 P-01/P-03 处理
-        person = next((str(normed[k]).strip() for k in _PERSON_TABLE_NORM["person"]
-                       if k in normed and str(normed[k] or "").strip()), None)
-        company = next((str(normed[k]).strip() for k in _PERSON_TABLE_NORM["company"]
-                        if k in normed and str(normed[k] or "").strip()), None)
-        role = next((str(normed[k]).strip() for k in _PERSON_TABLE_NORM["role"]
-                     if k in normed and str(normed[k] or "").strip()), "")
-        if not person or len(person) < 2 or not company:
+        people = _person_table_values(normed, "person")
+        companies = _person_table_values(normed, "company")
+        roles = _person_table_values(normed, "role")
+        if len(people) != 1 or len(companies) != 1 or len(people[0]) < 2:
             continue
-        by_person.setdefault(person, {}).setdefault(company, set()).add(role)
+        by_person.setdefault(people[0], {}).setdefault(companies[0], set()).update(roles or [""])
     signals: list[dict] = []
     for person in sorted(by_person):
         companies = by_person[person]
@@ -377,10 +401,33 @@ def person_table_overlap_signals(result: dict, bidder_names: set[str]) -> list[d
     return signals
 
 
+def near_quote_band_signals(bidders: list[dict]) -> list[dict]:
+    """F-07：两家主报价相对差异在 0.5%~2% 接近带内（真实陪标报价常见区间）。
+
+    ≤0.5% 由主线 F-01 以「高」覆盖；本规则只补中间带，级别「中」。
+    """
+    quotes = {b["name"]: b.get("primary_quote") for b in bidders if b.get("primary_quote")}
+    lower = 0.005
+    upper = PATTERN_THRESHOLDS["near_quote_secondary_relative_diff"]
+    signals: list[dict] = []
+    for left, right in _pairwise(list(quotes)):
+        a, b = quotes[left], quotes[right]
+        diff = abs(float(a["value"]) - float(b["value"])) / max(abs(float(a["value"])), abs(float(b["value"])), 1.0)
+        if lower < diff <= upper:
+            signals.append(_signal(
+                "QUOTE_NEAR_BAND", "投标总报价落入接近带", f"{left} ↔ {right}",
+                f"两份投标资料主报价分别为 {float(a['value']):,.2f} 与 {float(b['value']):,.2f}，"
+                f"相对差异约 {diff:.2%}（接近带 {lower:.1%}~{upper:.1%}）。该差异明显小于常见竞争性"
+                "报价差距，也可能由清单范围、取费口径或让利策略造成，须结合清单构成与控制价口径复核。",
+                [a, b], level="中"))
+    return signals
+
+
 def apply(result: dict, bidders: list[dict], signals: list[dict]) -> None:
     """把本模块全部规则追加进 review 信号列表（review_directory 接线入口）。"""
     names = {b["name"] for b in bidders}
     signals.extend(quote_pattern_signals(bidders))
+    signals.extend(near_quote_band_signals(bidders))
     signals.extend(uniform_discount_signals(bidders))
     signals.extend(line_item_set_signals(bidders))
     signals.extend(shared_block_signals(bidders))
@@ -392,7 +439,7 @@ def apply(result: dict, bidders: list[dict], signals: list[dict]) -> None:
 
 __all__ = [
     "PATTERN_THRESHOLDS", "RULE_IDS", "PERSON_FIELDS",
-    "quote_pattern_signals", "uniform_discount_signals", "line_item_set_signals",
-    "shared_block_signals", "person_overlap_signals", "payment_account_signals",
-    "kinship_signals", "person_table_overlap_signals", "apply",
+    "quote_pattern_signals", "near_quote_band_signals", "uniform_discount_signals",
+    "line_item_set_signals", "shared_block_signals", "person_overlap_signals",
+    "payment_account_signals", "kinship_signals", "person_table_overlap_signals", "apply",
 ]

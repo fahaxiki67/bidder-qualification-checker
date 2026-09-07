@@ -221,6 +221,116 @@ def test_xlsx_formula_without_cached_value_is_explicit_warning(tmp_path):
     assert "解析提示" in to_markdown(result)
 
 
+def test_xlsx_native_numeric_values_keep_decimal_scale(tmp_path):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["项目名称", "单位", "规格", "数量", "单价", "合价"])
+    sheet.append(["混凝土", "m3", "C30", 1.234, 1000, 1234])
+    sheet.append(["投标报价", 123.456])
+    workbook.save(bidder / "报价.xlsx")
+
+    result = review_directory(tmp_path)
+    bidder_result = result["bidders"][0]
+
+    assert bidder_result["primary_quote"]["value"] == 123.456
+    assert bidder_result["line_items"][0]["quantity"] == 1.234
+    assert bidder_result["line_items"][0]["amount"] == 1234
+
+
+def test_note_lines_never_produce_quote_or_control_evidence(tmp_path):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.txt").write_text(
+        "注：本表适用于建设项目招标控制价或投标报价的汇总。第1页共2页\n"
+        "注：1.“名称、规格、型号”、“基本价格指数”栏由招标人填写，价格指数 22\n"
+        "投标总价: 100000\n",
+        encoding="utf-8",
+    )
+    result = review_directory(tmp_path)
+    bidder_info = result["bidders"][0]
+    values = [q["value"] for q in bidder_info["quotes"]]
+    assert values == [100000]
+    assert bidder_info["primary_quote"]["value"] == 100000
+
+
+def test_pdf_text_layer_is_parsed_and_blank_pdf_flagged(tmp_path):
+    import io
+
+    from pypdf import PdfWriter
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+
+    # 默认 Helvetica 渲染不了中文（会变■），注册 CID 中文字体贴近真实标书。
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    except Exception:
+        pass
+
+    def _build_pdf(path, lines):
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer)
+        try:
+            c.setFont("STSong-Light", 12)
+        except Exception:
+            pass
+        y = 780
+        for line in lines:
+            c.drawString(72, y, line)
+            y -= 24
+        c.save()
+        path.write_bytes(buffer.getvalue())
+
+    bidder = tmp_path / "甲公司"
+    bidder.mkdir()
+    # 只画一行：drawString 的行在 extract_text 里可能粘连成一行，多数字会被报价识别保守拒绝。
+    _build_pdf(bidder / "经济标.pdf", ["投标总价: 185986265.34 yuan"])
+
+    result = review_directory(tmp_path)
+    info = result["bidders"][0]["files"][0]
+    assert info["parse_status"] == "OK"
+    assert info["structure"]["page_count"] == 1
+    assert info["structure"]["text_truncated"] is False
+    values = [q["value"] for q in result["bidders"][0]["quotes"]]
+    assert 185986265.34 in values
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    blank = tmp_path / "乙公司"
+    blank.mkdir()
+    blank_buffer = io.BytesIO()
+    writer.write(blank_buffer)
+    (blank / "扫描件.pdf").write_bytes(blank_buffer.getvalue())
+    result2 = review_directory(tmp_path)
+    scanned = next(f for b in result2["bidders"] for f in b["files"]
+                   if f["path"].endswith("扫描件.pdf"))
+    assert scanned["parse_status"] == "OK"
+    assert any("文本层" in w["reason"] for w in scanned.get("parse_warnings", []))
+
+
+def test_public_result_redacts_accounts_inside_raw_fields(tmp_path):
+    account = "6222021234567890123"
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.csv").write_text(
+        f"投标报价,100000,银行账号,{account}\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+    assert account not in to_json(result)
+
+    json_bidder = tmp_path / "乙"
+    json_bidder.mkdir()
+    (json_bidder / "清单.json").write_text(
+        json.dumps({"项目名称": "混凝土", "单位": "m3", "规格": "C30",
+                    "合价": 1234, "bank_account": account}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    result = review_directory(tmp_path)
+    assert account not in to_json(result)
+
+
 def test_line_items_do_not_match_by_name_when_units_differ(tmp_path):
     _write_bid(tmp_path / "甲", 100000, unit="m³")
     _write_bid(tmp_path / "乙", 100300, unit="吨")

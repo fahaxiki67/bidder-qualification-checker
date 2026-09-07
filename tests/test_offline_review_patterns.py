@@ -6,6 +6,7 @@ from app.offline_review_patterns import (
     apply,
     kinship_signals,
     line_item_set_signals,
+    near_quote_band_signals,
     payment_account_signals,
     person_overlap_signals,
     person_table_overlap_signals,
@@ -226,6 +227,44 @@ def test_review_directory_accepts_qichacha_style_person_table(tmp_path):
     codes = {s["code"] for s in result["signals"]}
     assert "PERSON_TABLE_OVERLAP" in codes
     assert all(s["auto_conclusion"] is False for s in result["signals"])
+
+
+def test_person_table_overlap_skips_conflicts_and_all_pair_aliases():
+    def row(raw):
+        return {"raw": raw}
+
+    conflicting = {"relation_clues": [
+        row({"姓名": "张三", "高管姓名": "李四", "企业名称": "甲公司"}),
+        row({"姓名": "张三", "企业名称": "乙公司"}),
+    ]}
+    assert person_table_overlap_signals(conflicting, {"甲公司", "乙公司"}) == []
+
+    for left, right in (("party_a", "party_b"), ("甲方", "乙方"),
+                        ("company_a", "company_b"), ("name_a", "name_b")):
+        paired = {"relation_clues": [
+            row({left: "甲公司", right: "乙公司", "姓名": "张三", "企业名称": "甲公司"}),
+            row({left: "甲公司", right: "乙公司", "姓名": "张三", "企业名称": "乙公司"}),
+        ]}
+        assert person_table_overlap_signals(paired, {"甲公司", "乙公司"}) == []
+
+
+def test_near_quote_band_flags_f07_in_secondary_range():
+    import app.offline_review as offline
+
+    lower = offline.THRESHOLDS["near_quote_relative_diff"]
+    upper = PATTERN_THRESHOLDS["near_quote_secondary_relative_diff"]
+    middle = (lower + upper) / 2
+
+    inside = [_bidder("甲", 185_986_265.34), _bidder("乙", 185_986_265.34 * (1 - middle))]
+    signals = near_quote_band_signals(inside)
+    assert _codes(signals) == ["QUOTE_NEAR_BAND"]
+    assert signals[0]["rule_id"] == "F-07"
+    assert signals[0]["level"] == "中"
+
+    tight = [_bidder("甲", 100_000), _bidder("乙", 100_300)]  # 0.3%，F-01 领域
+    assert near_quote_band_signals(tight) == []
+    wide = [_bidder("甲", 100_000), _bidder("乙", 103_000)]  # 3%，超出接近带
+    assert near_quote_band_signals(wide) == []
 
 
 def test_apply_aggregates_all_rules_and_keeps_manual_boundary():

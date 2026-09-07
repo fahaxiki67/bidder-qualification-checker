@@ -21,18 +21,27 @@ from pathlib import Path
 from statistics import median, mean, pstdev
 from typing import Any, Iterable
 
-from .offline_review_patterns import RULE_IDS as PATTERN_RULE_IDS, apply as apply_pattern_signals
+from .offline_review_patterns import (
+    RULE_IDS as PATTERN_RULE_IDS,
+    RELATION_LEFT_ALIASES,
+    RELATION_RIGHT_ALIASES,
+    _mask_account,
+    apply as apply_pattern_signals,
+)
 
 
-SUPPORTED_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xlsx"}
+SUPPORTED_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xlsx", ".pdf"}
 MAX_FILE_BYTES = 20 * 1024 * 1024
+# 真实投标经济标 PDF 常达数百页/数百 MB（实测单份 272MB），单独放宽。
+MAX_PDF_FILE_BYTES = 600 * 1024 * 1024
 MAX_ROWS = 100_000
 MAX_TEXT_FOR_COMPARE = 120_000
 MAX_INPUT_FILES = 500
-MAX_INPUT_BYTES = 200 * 1024 * 1024
+MAX_INPUT_BYTES = 1024 * 1024 * 1024
 MAX_XLSX_ZIP_MEMBERS = 2_000
 MAX_XLSX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_XLSX_ENTRY_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+MAX_PDF_PAGES = 500
 MAX_JSON_DEPTH = 100
 MAX_JSON_NODES = 100_000
 MAX_XLSX_AUDIT_CELLS = 200_000
@@ -100,6 +109,7 @@ _TOTAL_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _NOISE_FILE_RE = re.compile(r"^(?:~\$|\.)(?:.*)")
+_NOTE_LINE_RE = re.compile(r"\s*注\s*[:：]")
 _FOREIGN_CURRENCY_RE = re.compile(
     r"(?:[$€£]|\b(?:usd|eur|gbp|jpy|hkd|aud|cad|sgd|krw|inr|rub)\b|"
     r"美元|欧元|英镑|日元|港币|港元|澳元|加元|新加坡元|韩元|卢布)",
@@ -110,6 +120,14 @@ _QUOTE_NON_AMOUNT_CONTEXT_RE = re.compile(
     r"税率|税额|税点|tax[_ -]?rate|quantity|qty|数量|工程量|"
     r"discount|percent|折扣|下浮率|%",
     re.IGNORECASE,
+)
+_ACCOUNT_LABEL_RE = re.compile(
+    r"银行账号|保证金账户|保证金账号|开户账号|银行账户|退款账户|"
+    r"bank[_ -]?account|payment[_ -]?account",
+    re.IGNORECASE,
+)
+_ACCOUNT_TOKEN_RE = re.compile(
+    r"(?<![0-9A-Za-z])[0-9][0-9\s-]{7,30}[0-9](?![0-9A-Za-z])"
 )
 
 _ITEM_NAME_ALIASES = {"项目名称", "清单名称", "项目", "名称", "name", "item", "description", "清单项目"}
@@ -152,6 +170,47 @@ def _norm_text(value: str) -> str:
 
 def _norm_label(value: Any) -> str:
     return re.sub(r"[\s_\-]", "", str(value or "")).lower()
+
+
+def _redact_account_text(value: Any) -> str:
+    """在带账户字段的公开原文中遮盖相邻数字账号。"""
+    text = str(value or "")
+    replacements: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+    for label in _ACCOUNT_LABEL_RE.finditer(text):
+        window = text[label.end():]
+        for match in _ACCOUNT_TOKEN_RE.finditer(window):
+            digits = re.sub(r"[\s-]", "", match.group(0))
+            span = (label.end() + match.start(), label.end() + match.end())
+            if 9 <= len(digits) <= 24 and span not in seen:
+                seen.add(span)
+                replacements.append((
+                    span[0], span[1], _mask_account(digits),
+                ))
+    for start, end, replacement in reversed(replacements):
+        text = text[:start] + replacement + text[end:]
+    return text
+
+
+def _redact_public(value: Any) -> Any:
+    """统一处理公开结果中的账户字段及原文，保留输入文件不变。"""
+    if isinstance(value, dict):
+        key_field = _field_name(value.get("key")) if "key" in value else None
+        return {
+            key: (
+                "[已脱敏]" if _field_name(key) == "bank_account" or
+                (key == "value" and key_field == "bank_account")
+                else _redact_public(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_public(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_public(item) for item in value)
+    if isinstance(value, str):
+        return _redact_account_text(value)
+    return value
 
 
 def _json_value(value: Any) -> Any:
@@ -319,7 +378,7 @@ def _quote_cell_amounts(value: Any) -> list[float]:
     text = str(value or "").strip()
     if not text or _QUOTE_NON_AMOUNT_CONTEXT_RE.search(text):
         return []
-    return _amounts(text)
+    return _amounts(value)
 
 
 def _relative_diff(a: float, b: float) -> float:
@@ -332,7 +391,7 @@ def _quote(label: str, value: float, source: str, locator: str, raw: Any, kind: 
         "value": round(float(value), 6),
         "source": source,
         "locator": locator,
-        "raw": str(raw)[:500],
+        "raw": _redact_account_text(str(raw)[:500]),
         "kind": kind,
     }
 
@@ -398,7 +457,7 @@ def _line_item(name: Any, amount: Any, source: str, locator: str, quantity: Any 
         "unit_price": _parse_amount(unit_price),
         "source": source,
         "locator": locator,
-        "raw": str(raw if raw is not None else item_name)[:500],
+        "raw": _redact_account_text(str(raw if raw is not None else item_name)[:500]),
     }
 
 
@@ -428,7 +487,8 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
     quotes: list[dict] = []
     items: list[dict] = []
     for index, line in enumerate(text.splitlines(), 1):
-        if not line.strip():
+        if not line.strip() or _NOTE_LINE_RE.match(line):
+            # 「注：…」说明行的数字是页码/编号/示例，不构成报价证据。
             continue
         label_match = _LABEL_RE.search(line)
         if label_match:
@@ -455,6 +515,8 @@ def _quote_parse_warnings(text: str) -> list[dict]:
     """保留负报价/外币报价的可追溯缺口，不把它们静默当作无报价。"""
     warnings = []
     for index, line in enumerate(text.splitlines(), 1):
+        if _NOTE_LINE_RE.match(line):
+            continue
         label_match = _LABEL_RE.search(line)
         if not label_match:
             continue
@@ -463,13 +525,13 @@ def _quote_parse_warnings(text: str) -> list[dict]:
             warnings.append({
                 "locator": f"第{index}行",
                 "reason": "报价金额为负值，未纳入报价比较",
-                "raw": line[:500],
+                "raw": _redact_account_text(line[:500]),
             })
         elif _FOREIGN_CURRENCY_RE.search(tail) and _AMOUNT_RE.search(tail):
             warnings.append({
                 "locator": f"第{index}行",
                 "reason": "报价币种疑似为非人民币，未纳入报价比较",
-                "raw": line[:500],
+                "raw": _redact_account_text(line[:500]),
             })
     return warnings
 
@@ -516,8 +578,12 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
     metadata: dict[str, list[dict]] = {}
     prefix = f"工作表[{sheet}] " if sheet else ""
     for row_index, row in enumerate(rows, 1):
+        values = list(row)
         cells = ["" if cell is None else str(cell).strip() for cell in row]
         if not any(cells):
+            continue
+        # 「注：…」说明行里的"招标控制价/投标报价"字样是表样文字，不是报价数据。
+        if any(_NOTE_LINE_RE.match(cell) for cell in cells if cell):
             continue
         label_positions = [i for i, cell in enumerate(cells) if _LABEL_RE.search(cell)]
         for pos in label_positions:
@@ -526,12 +592,12 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
             if tail:
                 candidates = _amounts(tail)
             elif pos + 1 < len(cells):
-                candidates = _quote_cell_amounts(cells[pos + 1])
+                candidates = _quote_cell_amounts(values[pos + 1])
                 # 相邻两个裸数字无法判断哪个是报价（常见误配：税率/数量在前），宁可漏报。
                 if (candidates and pos + 2 < len(cells)
                         and not (_LABEL_RE.search(cells[pos + 2])
                                  or _QUOTE_NON_AMOUNT_CONTEXT_RE.search(cells[pos + 2]))
-                        and _quote_cell_amounts(cells[pos + 2])):
+                        and _quote_cell_amounts(values[pos + 2])):
                     candidates = []
             else:
                 candidates = []
@@ -566,17 +632,18 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
             break
     if header_index is not None and name_index is not None and amount_index is not None:
         for row_index, row in enumerate(rows[header_index + 1:], header_index + 2):
+            values = list(row)
             cells = ["" if cell is None else str(cell).strip() for cell in row]
             if len(cells) <= max(name_index, amount_index) or _TOTAL_LABEL_RE.search(" ".join(cells[:2])):
                 continue
             item = _line_item(
-                cells[name_index], cells[amount_index], source, f"{prefix}第{row_index}行",
-                cells[quantity_index] if quantity_index is not None and quantity_index < len(cells) else None,
-                cells[unit_price_index] if unit_price_index is not None and unit_price_index < len(cells) else None,
+                values[name_index], values[amount_index], source, f"{prefix}第{row_index}行",
+                values[quantity_index] if quantity_index is not None and quantity_index < len(values) else None,
+                values[unit_price_index] if unit_price_index is not None and unit_price_index < len(values) else None,
                 " | ".join(cells),
-                cells[unit_index] if unit_index is not None and unit_index < len(cells) else None,
-                cells[specification_index] if specification_index is not None and specification_index < len(cells) else None,
-                cells[feature_index] if feature_index is not None and feature_index < len(cells) else None,
+                values[unit_index] if unit_index is not None and unit_index < len(values) else None,
+                values[specification_index] if specification_index is not None and specification_index < len(values) else None,
+                values[feature_index] if feature_index is not None and feature_index < len(values) else None,
             )
             if item:
                 items.append(item)
@@ -676,9 +743,9 @@ def _primary_quote(quotes: list[dict]) -> dict | None:
 
 def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list[dict], dict, dict[str, list[dict]], str | None]:
     """读取一个文件，返回 public meta、compare text、quotes、items、structure、metadata、error。"""
-    raw = _read_limited(path)
-    digest = hashlib.sha256(raw).hexdigest()
     suffix = path.suffix.lower()
+    raw = _read_limited(path, limit=MAX_PDF_FILE_BYTES if suffix == ".pdf" else MAX_FILE_BYTES)
+    digest = hashlib.sha256(raw).hexdigest()
     quotes: list[dict] = []
     items: list[dict] = []
     structure: dict = {}
@@ -699,6 +766,32 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
         quotes, items, metadata = _json_walk(data, source)
         structure = {"json_type": type(data).__name__, "top_level_keys": list(data)[:50] if isinstance(data, dict) else []}
         text = json.dumps(data, ensure_ascii=False, sort_keys=True)
+    elif suffix == ".pdf":
+        # 真实投标经济标多为计价软件导出的 PDF；只读文本层，扫描件如实标注。
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:  # pragma: no cover - package declares dependency
+            raise ValueError("读取 pdf 需要 pypdf") from exc
+        import io as _io
+        reader = PdfReader(_io.BytesIO(raw))
+        page_count = len(reader.pages)
+        extracted = min(page_count, MAX_PDF_PAGES)
+        parts = []
+        for index in range(extracted):
+            try:
+                parts.append(reader.pages[index].extract_text() or "")
+            except Exception as exc:  # 单页失败不中断
+                parts.append(f"\n[第{index + 1}页提取失败: {type(exc).__name__}]\n")
+        text = "\n".join(parts)
+        quotes, items = _text_quotes(text, source)
+        structure = {"page_count": page_count, "extracted_pages": extracted,
+                     "text_truncated": page_count > extracted}
+        if not text.strip():
+            parse_warnings.append({
+                "locator": "全文",
+                "reason": f"PDF 未提取到文本层（疑似扫描件，共 {page_count} 页），未纳入报价与相似度比较",
+                "raw": path.name,
+            })
     elif suffix == ".xlsx":
         try:
             from openpyxl import load_workbook
@@ -1061,8 +1154,8 @@ def _add_relation_signals(path: Path | None, bidder_names: set[str], signals: li
         result["parse_errors"].append({"path": str(path), "error": error})
         return
     result["relation_clues"] = []
-    aliases_a = {"bidder_a", "company_a", "party_a", "投标人a", "企业a", "甲方", "name_a"}
-    aliases_b = {"bidder_b", "company_b", "party_b", "投标人b", "企业b", "乙方", "name_b"}
+    aliases_a = RELATION_LEFT_ALIASES
+    aliases_b = RELATION_RIGHT_ALIASES
     relation_aliases = {"relation", "relationship", "关联类型", "关联关系", "线索", "说明", "type"}
     source_aliases = {"source", "来源", "evidence", "证据", "依据", "source_note"}
     for row_number, row in enumerate(rows, 2):
@@ -1332,7 +1425,7 @@ def review_directory(input_dir: str | Path, *, project: str = "", relations: str
         },
         "manual_review_required": True,
     }
-    return result
+    return _redact_public(result)
 
 
 def to_json(result: dict) -> str:
