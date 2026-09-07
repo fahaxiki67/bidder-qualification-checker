@@ -33,6 +33,7 @@ RULE_IDS = {
     "SHARED_TEXT_BLOCKS": "S-05",
     "PERSON_OVERLAP": "P-02",
     "KINSHIP_RELATION": "P-03",
+    "PAYMENT_ACCOUNT_MATCH": "E-02",
 }
 
 # 人员类元数据字段：跨投标人相同值归入 P-02 主体线索，而不是 E-01 电子痕迹。
@@ -260,6 +261,47 @@ def shared_block_signals(bidders: list[dict]) -> list[dict]:
     return signals
 
 
+def _mask_account(value: str) -> str:
+    """账号脱敏：保留前 4 后 4，中间用 * 代替；过短全部打码。"""
+    text = re.sub(r"\s+", "", str(value or ""))
+    if len(text) <= 8:
+        return "*" * len(text)
+    return f"{text[:4]}{'*' * (len(text) - 8)}{text[-4:]}"
+
+
+def payment_account_signals(bidders: list[dict]) -> list[dict]:
+    """E-02：银行/保证金账户字段跨投标人出现相同账号（电子标经典线索）。
+
+    证据只保留脱敏账号，完整账号留在原始文件中由人工比对。
+    """
+    maps: dict[str, dict[str, set[str]]] = {}
+    for bidder in bidders:
+        by_field: dict[str, set[str]] = {}
+        for field, values in bidder.get("metadata", {}).items():
+            if field != "bank_account":
+                continue
+            for entry in values:
+                text = str(entry.get("value") or "").strip()
+                if text:
+                    by_field.setdefault(field, set()).add(_norm(text))
+        maps[bidder["name"]] = by_field
+    signals: list[dict] = []
+    for left, right in _pairwise(list(maps)):
+        for field in sorted(set(maps[left]) & set(maps[right])):
+            shared = maps[left][field] & maps[right][field]
+            if not shared:
+                continue
+            signals.append(_signal(
+                "PAYMENT_ACCOUNT_MATCH", "投标资料所载银行/保证金账户相同", f"{left} ↔ {right}",
+                f"账户字段 {field} 出现相同账号（证据中已脱敏）；保证金由同一账户代缴、"
+                "退款账户误填或代理机构代收均可能是正常原因，须以银行流水、保证金收退"
+                "凭证与交易平台留痕核实。",
+                [{"bidder": left, "field": field, "accounts": sorted(_mask_account(v) for v in shared)},
+                 {"bidder": right, "field": field, "accounts": sorted(_mask_account(v) for v in shared)}],
+                level="高"))
+    return signals
+
+
 def apply(result: dict, bidders: list[dict], signals: list[dict]) -> None:
     """把本模块全部规则追加进 review 信号列表（review_directory 接线入口）。"""
     signals.extend(quote_pattern_signals(bidders))
@@ -267,11 +309,13 @@ def apply(result: dict, bidders: list[dict], signals: list[dict]) -> None:
     signals.extend(line_item_set_signals(bidders))
     signals.extend(shared_block_signals(bidders))
     signals.extend(person_overlap_signals(bidders))
+    signals.extend(payment_account_signals(bidders))
     signals.extend(kinship_signals(result, {b["name"] for b in bidders}))
 
 
 __all__ = [
     "PATTERN_THRESHOLDS", "RULE_IDS", "PERSON_FIELDS",
     "quote_pattern_signals", "uniform_discount_signals", "line_item_set_signals",
-    "shared_block_signals", "person_overlap_signals", "kinship_signals", "apply",
+    "shared_block_signals", "person_overlap_signals", "payment_account_signals",
+    "kinship_signals", "apply",
 ]

@@ -120,6 +120,8 @@ _FIELD_ALIASES = {
     "registered_address": {"注册地址", "注册地", "address", "registeredaddress"},
     "project_manager": {"项目经理", "项目负责人", "projectmanager", "project_manager"},
     "company_uscc": {"统一社会信用代码", "社会信用代码", "uscc", "creditcode"},
+    "bank_account": {"银行账号", "保证金账户", "保证金账号", "开户账号", "银行账户",
+                     "退款账户", "bankaccount", "bank_account", "paymentaccount"},
 }
 _CANONICAL_FIELD_BY_ALIAS = {
     re.sub(r"[\s_\-]", "", alias).lower(): field

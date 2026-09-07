@@ -6,6 +6,7 @@ from app.offline_review_patterns import (
     apply,
     kinship_signals,
     line_item_set_signals,
+    payment_account_signals,
     person_overlap_signals,
     quote_pattern_signals,
     shared_block_signals,
@@ -156,6 +157,27 @@ def test_shared_block_text_flags_s05_for_partial_plagiarism():
     ]
     assert shared_block_signals(unrelated) == []
     assert shared_block_signals([_bidder_with_text("甲", "短文本")]) == []
+
+
+def test_payment_account_match_flags_e02_with_masked_evidence():
+    account = {"bank_account": [{"key": "保证金账户", "value": "6222021234567890123"}]}
+    signals = payment_account_signals([
+        _bidder("甲", 100, metadata=account),
+        _bidder("乙", 200, metadata=account),
+    ])
+    assert _codes(signals) == ["PAYMENT_ACCOUNT_MATCH"]
+    assert signals[0]["rule_id"] == "E-02"
+    assert signals[0]["level"] == "高"
+    evidence_payload = json.dumps(signals[0]["evidence"], ensure_ascii=False)
+    assert "6222021234567890123" not in evidence_payload
+    assert "6222" in evidence_payload and "0123" in evidence_payload and "*" * 8 in evidence_payload
+
+    distinct = [
+        _bidder("甲", 100, metadata=account),
+        _bidder("乙", 200, metadata={"bank_account": [{"key": "保证金账户",
+                                                       "value": "6217009988776655443"}]}),
+    ]
+    assert payment_account_signals(distinct) == []
 
 
 def test_apply_aggregates_all_rules_and_keeps_manual_boundary():
