@@ -324,6 +324,8 @@ def test_cross_site_post_rejected(tmp_path, monkeypatch):
     assert c.post("/projects", data=data, headers=evil, follow_redirects=False).status_code == 403
     same = {"Origin": "http://testserver", "Referer": "http://testserver/"}
     assert c.post("/projects", data=data, headers=same, follow_redirects=False).status_code == 303
+    wrong_port = {"Origin": "http://testserver:8001"}
+    assert c.post("/projects", data=data, headers=wrong_port, follow_redirects=False).status_code == 403
     assert c.post("/projects", data=data, follow_redirects=False).status_code in (303, 400)
 
 

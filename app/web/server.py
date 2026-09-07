@@ -65,11 +65,27 @@ app = FastAPI(title="投标审查器", version=__version__)
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
-def _same_origin(target_host: str, source_host: str) -> bool:
-    t, s = (target_host or "").lower(), (source_host or "").lower()
-    if t == s:
-        return True
-    return t in _LOOPBACK_HOSTS and s in _LOOPBACK_HOSTS
+def _origin(value: str) -> tuple[str, str, int] | None:
+    raw = str(value or "").strip()
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    try:
+        parsed = urlparse(raw)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    host = host.lower().strip("[]")
+    if host in _LOOPBACK_HOSTS:
+        host = "__loopback__"
+    scheme = parsed.scheme.lower()
+    return scheme, host, port or (443 if scheme == "https" else 80)
+
+
+def _same_origin(target_url: str, source_url: str) -> bool:
+    return _origin(target_url) == _origin(source_url)
 
 
 @app.middleware("http")
@@ -82,8 +98,7 @@ async def _cross_site_write_guard(request: Request, call_next):
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         src = request.headers.get("origin") or request.headers.get("referer")
         if src:
-            host = urlparse(src).hostname or ""
-            if not _same_origin(request.url.hostname or "", host):
+            if not _same_origin(str(request.url), src):
                 return PlainTextResponse(
                     "跨站写请求已被拒绝（同源校验失败）：本服务仅限本机访问",
                     status_code=403)
@@ -139,6 +154,28 @@ def _validate_text(label: str, value: str, max_len: int, *, required: bool = Fal
     return value
 
 
+def _review_root() -> Path:
+    raw = os.environ.get("BQC_REVIEW_ROOT") or str(Path.cwd())
+    try:
+        return Path(raw).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"离线审查根目录无法解析：{raw}") from exc
+
+
+def _confine_review_path(label: str, value: str, root: Path, *, allow_root: bool = False) -> str:
+    try:
+        path = Path(value).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{label}路径无法解析") from exc
+    inside = path == root if allow_root else root in path.parents
+    if not inside:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label}必须位于 BQC_REVIEW_ROOT 目录内",
+        )
+    return str(path)
+
+
 @app.get("/")
 def index(request: Request):
     return TEMPLATES.TemplateResponse(
@@ -165,6 +202,10 @@ def offline_review_submit(
     input_dir = _validate_text("输入目录", input_dir, 1000, required=True)
     project = _validate_text("项目名称", project, _MAX_NAME)
     relations = _validate_text("关联线索文件", relations, 1000)
+    root = _review_root()
+    input_dir = _confine_review_path("输入目录", input_dir, root, allow_root=True)
+    if relations:
+        relations = _confine_review_path("关联线索文件", relations, root)
     try:
         result = review_directory(input_dir, project=project, relations=relations or None)
     except (OSError, ValueError) as exc:

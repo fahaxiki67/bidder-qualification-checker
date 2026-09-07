@@ -1,6 +1,7 @@
 import json
 import hashlib
 import importlib
+import os
 import zipfile
 from pathlib import Path
 
@@ -126,6 +127,17 @@ def test_csv_quote_uses_first_amount_before_tax_rate(tmp_path):
     assert bidders["乙"]["primary_quote"] is None
 
 
+def test_text_quote_skips_multiple_amounts_in_one_line(tmp_path):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.txt").write_text("投标报价：税率13%，金额100000\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    assert result["bidders"][0]["primary_quote"] is None
+    assert not result["bidders"][0]["quotes"]
+
+
 def test_review_parses_json_and_xlsx_with_traceable_hashes(tmp_path):
     first = tmp_path / "甲"
     first.mkdir()
@@ -160,6 +172,24 @@ def test_review_parses_json_and_xlsx_with_traceable_hashes(tmp_path):
     assert sheet_meta["formula_count"] == 1
     assert bidders["乙"]["line_items"][0]["comparability_status"] == "INSUFFICIENT_DATA"
     json.loads(to_json(result))
+
+
+def test_xlsx_formula_without_cached_value_is_explicit_warning(tmp_path):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["投标报价", "=100000"])
+    workbook.save(bidder / "报价.xlsx")
+
+    result = review_directory(tmp_path)
+    bidder_result = result["bidders"][0]
+    sheet_meta = bidder_result["files"][0]["structure"]["sheets"][0]
+
+    assert bidder_result["primary_quote"] is None
+    assert sheet_meta["formula_count"] == 1
+    assert any("不计算公式" in warning["error"] for warning in result["parse_warnings"])
+    assert "解析提示" in to_markdown(result)
 
 
 def test_line_items_do_not_match_by_name_when_units_differ(tmp_path):
@@ -244,9 +274,24 @@ def test_quote_parser_keeps_invalid_currency_and_negative_values_traceable(tmp_p
 
     assert result["bidders"][0]["primary_quote"] is None
     assert result["bidders"][0]["quotes"] == []
-    errors = result["parse_errors"]
-    assert any("负值" in error["error"] for error in errors)
-    assert any("非人民币" in error["error"] for error in errors)
+    warnings = result["parse_warnings"]
+    assert any("负值" in warning["error"] for warning in warnings)
+    assert any("非人民币" in warning["error"] for warning in warnings)
+    assert result["summary"]["parse_warning_count"] == 2
+
+
+def test_normalized_text_hash_covers_content_after_compare_prefix(tmp_path):
+    prefix = "a" * (offline_review.MAX_TEXT_FOR_COMPARE + 100)
+    for name, suffix in (("甲", "left-tail"), ("乙", "right-tail")):
+        bidder = tmp_path / name
+        bidder.mkdir()
+        (bidder / "说明.txt").write_text(prefix + suffix, encoding="utf-8")
+
+    result = review_directory(tmp_path)
+    files = [bidder["files"][0] for bidder in result["bidders"]]
+
+    assert files[0]["normalized_sha256"] != files[1]["normalized_sha256"]
+    assert not any(signal["code"] == "TEXT_EXACT_MATCH" for signal in result["signals"])
 
 
 def test_short_identical_files_do_not_create_exact_match_signal(tmp_path):
@@ -440,11 +485,28 @@ def test_write_outputs_rejects_input_paths_before_writing(tmp_path, capsys):
     assert source_path.read_bytes() == before
 
 
-def test_web_offline_review_entry_reads_only_explicit_directory(tmp_path):
+def test_write_outputs_rejects_hardlink_alias(tmp_path):
+    _write_bid(tmp_path / "甲", 100000)
+    result = review_directory(tmp_path)
+    source_path = tmp_path / "甲" / "报价.csv"
+    alias = tmp_path.parent / f"{tmp_path.name}-alias.csv"
+    try:
+        os.link(source_path, alias)
+    except OSError as exc:
+        pytest.skip(f"当前环境不允许创建硬链接：{exc}")
+
+    before = source_path.read_bytes()
+    with pytest.raises(ValueError, match="输入源文件"):
+        write_outputs(result, json_path=alias)
+    assert source_path.read_bytes() == before
+
+
+def test_web_offline_review_entry_reads_only_explicit_directory(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     import app.web.server as server
 
     _write_bid(tmp_path / "甲", 100000)
+    monkeypatch.setenv("BQC_REVIEW_ROOT", str(tmp_path))
     importlib.reload(server)
     client = TestClient(server.app)
 
@@ -456,3 +518,9 @@ def test_web_offline_review_entry_reads_only_explicit_directory(tmp_path):
     assert result.status_code == 200
     assert "人工复核" in result.text
     assert "Web 测试" in result.text
+
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    _write_bid(outside / "乙", 100000)
+    rejected = client.post("/review-bids", data={"input_dir": str(outside)})
+    assert rejected.status_code == 400
+    assert "BQC_REVIEW_ROOT" in rejected.json()["detail"]

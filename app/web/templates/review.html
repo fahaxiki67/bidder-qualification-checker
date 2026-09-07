@@ -12,7 +12,7 @@
     <input name="relations" placeholder="可包含 bidder_a、bidder_b、relation、source 字段">
     <button type="submit">开始离线审查</button>
   </form>
-  <p style="font-size:12px;color:#66788c;">目录约定：一级子目录名为投标人；根目录文件可使用 bidder__filename.ext。只读本地资料，不上传、不联网、不修改原文件。</p>
+  <p style="font-size:12px;color:#66788c;">目录约定：一级子目录名为投标人；根目录文件可使用 bidder__filename.ext。默认仅允许服务当前工作目录内的路径（其他目录请先设置 BQC_REVIEW_ROOT）。只读本地资料，不上传、不联网、不修改原文件。</p>
 </div>
 
 {% if result %}

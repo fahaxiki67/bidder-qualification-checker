@@ -94,6 +94,11 @@ _FOREIGN_CURRENCY_RE = re.compile(
     re.IGNORECASE,
 )
 _NEGATIVE_AMOUNT_RE = re.compile(r"(?<![\w.])[-−]\s*\d")
+_QUOTE_NON_AMOUNT_CONTEXT_RE = re.compile(
+    r"税率|税额|税点|tax[_ -]?rate|quantity|qty|数量|工程量|"
+    r"discount|percent|折扣|下浮率|%",
+    re.IGNORECASE,
+)
 
 _ITEM_NAME_ALIASES = {"项目名称", "清单名称", "项目", "名称", "name", "item", "description", "清单项目"}
 _ITEM_UNIT_ALIASES = {"单位", "计量单位", "unit", "uom"}
@@ -295,6 +300,14 @@ def _amounts(value: Any) -> list[float]:
     return [x for x in (_parse_amount(m.group(0)) for m in _AMOUNT_RE.finditer(text)) if x is not None]
 
 
+def _quote_cell_amounts(value: Any) -> list[float]:
+    """只从紧邻报价标签的、没有数量/税率语义的单元格取金额。"""
+    text = str(value or "").strip()
+    if not text or _QUOTE_NON_AMOUNT_CONTEXT_RE.search(text):
+        return []
+    return _amounts(text)
+
+
 def _relative_diff(a: float, b: float) -> float:
     return abs(a - b) / max(abs(a), abs(b), 1.0)
 
@@ -406,8 +419,9 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
         label_match = _LABEL_RE.search(line)
         if label_match:
             tail = line[label_match.end():]
-            value = _parse_amount(tail)
-            if value is not None:
+            candidates = _amounts(tail)
+            if len(candidates) == 1:
+                value = candidates[0]
                 label = label_match.group(1)
                 quotes.append(_quote(label, value, source, f"第{index}行", line, _quote_kind(label)))
         # 仅把带明显分隔符、且首段像清单名称的行当作明细，降低普通数字误报。
@@ -496,7 +510,7 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
             label_match = _LABEL_RE.search(cells[pos])
             tail = cells[pos][label_match.end():] if label_match else ""
             candidates = _amounts(tail) if tail else (
-                _amounts(cells[pos + 1]) if pos + 1 < len(cells) else []
+                _quote_cell_amounts(cells[pos + 1]) if pos + 1 < len(cells) else []
             )
             if len(candidates) == 1:
                 label = label_match.group(1) if label_match else cells[pos]
@@ -643,6 +657,7 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
     items: list[dict] = []
     structure: dict = {}
     metadata: dict[str, list[dict]] = {}
+    parse_warnings: list[dict] = []
     if suffix in {".txt", ".md"}:
         text = _decode(raw)
         quotes, items = _text_quotes(text, source)
@@ -739,6 +754,15 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
                     summary["merged_range_count"] = None
                     summary["formula_count"] = None
                     summary["audit_truncated"] = True
+            formula_count = sum(
+                int(summary.get("formula_count") or 0) for summary in sheet_summaries
+            )
+            if formula_count:
+                parse_warnings.append({
+                    "locator": "XLSX 工作表",
+                    "reason": f"XLSX 含 {formula_count} 个公式；程序不计算公式，报价可能依赖缓存显示值，需在 Excel/WPS 重算后人工复核",
+                    "raw": path.name,
+                })
             properties = workbook.properties
             _merge_metadata(metadata, _metadata_from_pairs((("author", properties.creator), ("lastModifiedBy", properties.lastModifiedBy))))
         finally:
@@ -757,7 +781,7 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
         "extension": suffix,
         "size_bytes": len(raw),
         "sha256": digest,
-        "normalized_sha256": hashlib.sha256(_norm_text(compare_text).encode("utf-8")).hexdigest(),
+        "normalized_sha256": hashlib.sha256(_norm_text(text).encode("utf-8")).hexdigest(),
         "parse_status": "OK",
         "text_chars": len(text),
         "quote_count": len(_dedupe_quotes(quotes)),
@@ -765,9 +789,9 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
         "structure": structure,
         "metadata_fields": sorted(metadata),
     }
-    quote_warnings = _quote_parse_warnings(text)
-    if quote_warnings:
-        public["parse_warnings"] = quote_warnings
+    parse_warnings.extend(_quote_parse_warnings(text))
+    if parse_warnings:
+        public["parse_warnings"] = parse_warnings
     return public, compare_text, _dedupe_quotes(quotes), _dedupe_items(items), structure, metadata, None
 
 
@@ -1132,7 +1156,7 @@ def _load_bidder_files(root: Path, result: dict, excluded_paths: set[Path] | Non
                 text, q, i, structure, file_meta, error = "", [], [], {}, {}, str(exc)
             public_files.append(public)
             for warning in public.get("parse_warnings", []):
-                result["parse_errors"].append({
+                result["parse_warnings"].append({
                     "path": relative,
                     "bidder": name,
                     "locator": warning["locator"],
@@ -1227,6 +1251,7 @@ def review_directory(input_dir: str | Path, *, project: str = "", relations: str
         "relation_clues": [],
         "unsupported_files": [],
         "parse_errors": [],
+        "parse_warnings": [],
         "skipped_files": [],
         "scan_errors": [],
         "scan": {
@@ -1260,6 +1285,7 @@ def review_directory(input_dir: str | Path, *, project: str = "", relations: str
         "signal_count": len(signals),
         "unsupported_file_count": len(result["unsupported_files"]),
         "parse_error_count": len(result["parse_errors"]),
+        "parse_warning_count": len(result["parse_warnings"]),
         "skipped_file_count": len(result["skipped_files"]),
         "scan_error_count": len(result["scan_errors"]),
         "line_item_count": len(all_items),
@@ -1307,6 +1333,7 @@ def to_markdown(result: dict) -> str:
         f"| 风险信号 | {summary.get('signal_count', 0)} |",
         f"| 不支持文件 | {summary.get('unsupported_file_count', 0)} |",
         f"| 解析错误 | {summary.get('parse_error_count', 0)} |",
+        f"| 解析提示 | {summary.get('parse_warning_count', 0)} |",
         f"| 跳过文件 / 扫描问题 | {summary.get('skipped_file_count', 0)} / {summary.get('scan_error_count', 0)} |",
         "",
         "## 投标人和来源文件",
@@ -1335,13 +1362,15 @@ def to_markdown(result: dict) -> str:
             compact = "; ".join(f"{k}={v}" for k, v in evidence.items() if k not in {"raw", "text"})
             lines.append(f"  - {_md(compact)}")
         lines.append("")
-    if (result.get("unsupported_files") or result.get("parse_errors") or
+    if (result.get("unsupported_files") or result.get("parse_errors") or result.get("parse_warnings") or
             result.get("skipped_files") or result.get("scan_errors")):
         lines.extend(["## 未完整纳入的资料", ""])
         for file in result.get("unsupported_files", []):
             lines.append(f"- 未支持：`{_md(file.get('path'))}`（{_md(file.get('extension'))}）")
         for error in result.get("parse_errors", []):
             lines.append(f"- 解析失败：`{_md(error.get('path'))}`：{_md(error.get('error'))}")
+        for warning in result.get("parse_warnings", []):
+            lines.append(f"- 解析提示：`{_md(warning.get('path'))}`：{_md(warning.get('error'))}")
         for skipped in result.get("skipped_files", []):
             lines.append(f"- 已跳过：`{_md(skipped.get('path'))}`（{_md(skipped.get('reason'))}）")
         for error in result.get("scan_errors", []):
@@ -1363,6 +1392,13 @@ def _resolve_result_path(value: Any, base: Path | None = None) -> Path:
         return path.resolve()
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise ValueError(f"结果中的路径无法解析：{value}") from exc
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except (FileNotFoundError, OSError):
+        return False
 
 
 def write_outputs(result: dict, *, json_path: str | Path | None = None, report_path: str | Path | None = None) -> tuple[Path | None, Path | None]:
@@ -1392,7 +1428,7 @@ def write_outputs(result: dict, *, json_path: str | Path | None = None, report_p
         target = _resolve_result_path(path)
         if target == root or root in target.parents:
             raise ValueError(f"输出路径不能位于输入目录内：{target}")
-        if target in source_paths:
+        if target in source_paths or any(_same_file(target, source) for source in source_paths):
             raise ValueError(f"输出路径不能覆盖输入源文件：{target}")
         pending.append((target, content))
 
