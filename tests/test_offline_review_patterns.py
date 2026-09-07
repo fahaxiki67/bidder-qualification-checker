@@ -11,7 +11,8 @@ from app.offline_review_patterns import (
 
 
 def _item(name: str, amount: float) -> dict:
-    return {"name": name, "key": name, "amount": amount}
+    return {"name": name, "key": name, "comparison_key": f"{name}|m³|一般土方",
+            "comparability_status": "COMPARABLE", "amount": amount}
 
 
 def _bidder(name, total=None, *, control=None, items=(), metadata=None):

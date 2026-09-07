@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}离线投标文件审查 · 投标审查器{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>多投标文件离线审查</h2>
+  <form method="post" action="/review-bids">
+    <label>输入目录（服务端所在机器） *</label>
+    <input name="input_dir" required placeholder="例：C:\\项目资料\\投标文件">
+    <label>项目名称</label>
+    <input name="project" placeholder="仅写入报告，不参与判定">
+    <label>本地关联线索 CSV/JSON（可选）</label>
+    <input name="relations" placeholder="可包含 bidder_a、bidder_b、relation、source 字段">
+    <button type="submit">开始离线审查</button>
+  </form>
+  <p style="font-size:12px;color:#66788c;">目录约定：一级子目录名为投标人；根目录文件可使用 bidder__filename.ext。只读本地资料，不上传、不联网、不修改原文件。</p>
+</div>
+
+{% if result %}
+<div class="card">
+  <h2>审查概况</h2>
+  <table>
+    <tr><th>输入目录</th><td>{{ result.input_dir }}</td></tr>
+    <tr><th>投标人 / 文件</th><td>{{ result.summary.bidder_count }} / {{ result.summary.file_count }}（成功解析 {{ result.summary.parsed_file_count }}）</td></tr>
+    <tr><th>风险信号</th><td><span class="badge badge-warn">{{ result.summary.signal_count }} 条 · 全部需人工复核</span></td></tr>
+    <tr><th>边界</th><td>{{ result.legal_notice.conclusion }}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>投标人报价</h2>
+  <table>
+    <tr><th>投标人</th><th>来源文件</th><th>主报价（元）</th><th>清单项</th></tr>
+    {% for bidder in result.bidders %}
+    <tr><td>{{ bidder.name }}</td><td>{{ bidder.files|length }}</td><td>{{ bidder.primary_quote.value if bidder.primary_quote else "未识别" }}</td><td>{{ bidder.line_item_count }}</td></tr>
+    {% else %}<tr><td colspan="4">未发现可扫描文件</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>风险信号（人工复核）</h2>
+  {% for signal in result.signals %}
+  <div style="border-bottom:1px solid var(--line);padding:10px 0;">
+    <span class="badge badge-warn">{{ signal.id }} · {{ signal.level }}</span>
+    <strong>{{ signal.title }}</strong>
+    <div style="font-size:13px;margin-top:5px;">范围：{{ signal.scope }}</div>
+    <div style="font-size:13px;color:#41526b;margin-top:4px;">{{ signal.description }}</div>
+    <div style="font-size:12px;color:#66788c;margin-top:4px;">建议：{{ signal.manual_action }}</div>
+  </div>
+  {% else %}<p>未触发本次模式预警；这不等于确认不存在违法或其他异常。</p>{% endfor %}
+</div>
+
+<div class="card">
+  <h2>可复制结果</h2>
+  <details><summary>Markdown 报告</summary><pre style="white-space:pre-wrap;font-size:12px;">{{ report }}</pre></details>
+  <details><summary>JSON</summary><pre style="white-space:pre-wrap;font-size:11px;max-height:480px;overflow:auto;">{{ json_text }}</pre></details>
+</div>
+{% endif %}
+{% endblock %}

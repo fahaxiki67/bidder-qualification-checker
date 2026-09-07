@@ -134,10 +134,14 @@ def uniform_discount_signals(bidders: list[dict]) -> list[dict]:
 
 
 def line_item_set_signals(bidders: list[dict]) -> list[dict]:
-    """S-04：两家清单项目构成（名称集合）高度一致，即便金额不同。"""
+    """S-04：两家可比清单项目构成高度一致，即便金额不同。"""
     key_sets: dict[str, set[str]] = {}
     for bidder in bidders:
-        key_sets[bidder["name"]] = {i["key"] for i in bidder.get("line_items", []) if i.get("key")}
+        key_sets[bidder["name"]] = {
+            item["comparison_key"]
+            for item in bidder.get("line_items", [])
+            if item.get("comparison_key") and item.get("comparability_status") == "COMPARABLE"
+        }
     signals: list[dict] = []
     for left, right in _pairwise(list(key_sets)):
         a, b = key_sets[left], key_sets[right]

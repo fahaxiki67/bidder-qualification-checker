@@ -27,6 +27,7 @@ from ..core.rules import load_rule_specs
 from ..paths import default_db_path
 from ..core.runner import run_check
 from ..core.status import Status, report_label
+from ..offline_review import review_directory, to_json, to_markdown
 from ..sources.mock import SCENARIOS
 
 # 数据库默认路径：源码/CLI=当前工作目录 data/；PyInstaller 打包=用户数据目录
@@ -58,7 +59,7 @@ BADGE = {
     Status.PASS.value: "badge-ok",
 }
 
-app = FastAPI(title="投标人资格智能核查系统", version=__version__)
+app = FastAPI(title="投标审查器", version=__version__)
 
 # ---------- 跨站写保护（0.19.0 审计整改） ----------
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -143,6 +144,34 @@ def index(request: Request):
     return TEMPLATES.TemplateResponse(
         request, "index.html",
         {"today": date.today().isoformat(), "version": __version__},
+    )
+
+
+@app.get("/review-bids")
+def offline_review_page(request: Request):
+    """离线多投标文件审查入口；只读取用户明确提供的本地目录，不访问网络。"""
+    return TEMPLATES.TemplateResponse(
+        request, "review.html", {"version": __version__, "result": None, "report": "", "json_text": ""}
+    )
+
+
+@app.post("/review-bids")
+def offline_review_submit(
+    request: Request,
+    input_dir: str = Form(...),
+    project: str = Form(""),
+    relations: str = Form(""),
+):
+    input_dir = _validate_text("输入目录", input_dir, 1000, required=True)
+    project = _validate_text("项目名称", project, _MAX_NAME)
+    relations = _validate_text("关联线索文件", relations, 1000)
+    try:
+        result = review_directory(input_dir, project=project, relations=relations or None)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"无法完成离线审查：{exc}") from exc
+    return TEMPLATES.TemplateResponse(
+        request, "review.html",
+        {"version": __version__, "result": result, "report": to_markdown(result), "json_text": to_json(result)},
     )
 
 

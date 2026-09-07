@@ -133,7 +133,7 @@ def export_pdf(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
 
     body, h1, h2, small, cell, cell_head = _styles()
     story = []
-    story.append(Paragraph("投标人资格核查报告", h1))
+    story.append(Paragraph("投标审查器 · 投标人资格核查报告", h1))
     story.append(Paragraph(
         f"bqc {__version__} · 本报告为机器核查结论，'待人工核查/查询失败'绝不代表'无异常'",
         small))
@@ -208,7 +208,7 @@ def export_pdf(db_path: str | Path, pc_id: int, out_path: str | Path) -> Path:
     doc = SimpleDocTemplate(str(out), pagesize=A4,
                             leftMargin=18 * mm, rightMargin=18 * mm,
                             topMargin=16 * mm, bottomMargin=16 * mm,
-                            title=f"投标人资格核查报告 - {company['name']}",
+                            title=f"投标审查器 · 投标人资格核查报告 - {company['name']}",
                             author=f"bqc {__version__}")
     doc.build(story)
     return out

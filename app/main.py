@@ -1,4 +1,4 @@
-"""CLI 入口。P1 仅提供 init-db 与帮助；核查任务与 Web UI 在 P2 接入。"""
+"""投标审查器 CLI：资格审查、证据链与离线多投标文件风险预警。"""
 from __future__ import annotations
 
 import argparse
@@ -36,7 +36,7 @@ def _force_utf8_stdio() -> None:
 def main(argv=None) -> int:
     _force_utf8_stdio()
     parser = argparse.ArgumentParser(
-        prog="bqc", description="投标人资格智能核查系统 — 资格前审证据链工具"
+        prog="bqc", description="投标审查器 — 资格前审证据链与离线投标文件风险预警（投标人资格智能核查系统）"
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
@@ -71,6 +71,13 @@ def main(argv=None) -> int:
     p_report.add_argument("--db", default=str(DEFAULT_DB), help="数据库路径")
     p_report.add_argument("--excel", help="输出 .xlsx 路径")
     p_report.add_argument("--pdf", help="输出 .pdf 路径")
+    p_review = sub.add_parser(
+        "review-bids", help="离线审查多家投标文件（仅风险预警，不自动作出法律结论）")
+    p_review.add_argument("input_dir", help="输入目录：一级子目录名为投标人，或使用 bidder__filename.ext")
+    p_review.add_argument("--project", default="", help="项目名称（仅写入报告）")
+    p_review.add_argument("--relations", help="可选本地关联线索 .csv/.json（保留原值，仍须人工核验）")
+    p_review.add_argument("--output-json", help="输出 JSON 路径")
+    p_review.add_argument("--output-report", help="输出 Markdown 报告路径")
     args = parser.parse_args(argv)
 
     if args.command == "init-db":
@@ -156,6 +163,29 @@ def main(argv=None) -> int:
         except ValueError as e:
             print(f"无法生成报告：{e}")
             return 2
+        return 0
+
+    if args.command == "review-bids":
+        from .offline_review import review_directory, to_markdown, write_outputs
+
+        try:
+            result = review_directory(args.input_dir, project=args.project, relations=args.relations)
+            json_out, report_out = write_outputs(
+                result, json_path=args.output_json, report_path=args.output_report)
+        except (OSError, ValueError) as e:
+            print(f"无法完成离线审查：{e}")
+            return 2
+        print(
+            f"离线审查完成：投标人 {result['summary']['bidder_count']} 家，"
+            f"文件 {result['summary']['file_count']} 份，"
+            f"风险信号 {result['summary']['signal_count']} 条（全部需人工复核）"
+        )
+        if json_out:
+            print(f"JSON：{json_out}")
+        if report_out:
+            print(f"报告：{report_out}")
+        if not json_out and not report_out:
+            print(to_markdown(result))
         return 0
 
     if args.command == "serve":

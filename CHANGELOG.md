@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 ## [未发布]
 
 ### Added
+- **投标审查器离线多投标文件预警**：新增 `app/offline_review.py` 与 `bqc review-bids`，
+  支持 txt/md/csv/json/xlsx 的报价、清单、文本、结构、元数据相似性和本地关联线索检查，
+  输出可追溯 JSON 与 Markdown；所有信号固定为人工复核，不自动认定串通、违法或投标无效。
+- Web 增加 `/review-bids` 本地入口；产品显示名更新为“投标审查器”，旧 `bqc` 命令保持不变。
+- 新增 `docs/OFFLINE_REVIEW.md`，登记阈值、法律适用边界和测试资料状态。
+- 收紧离线清单对齐：仅对名称、单位和规格/项目特征齐全且一致的项目比较；复合 JSON 报价不再
+  从对象字符串取数；增加符号链接跳过记录、输入总量预算和 XLSX ZIP 解压大小防护，并补充回归测试。
+- 新增 `app/offline_review_patterns.py` 增量规则模块（已接入 `review_directory`）：
+  F-05 多家主报价等差/等比排列、F-06 相对控制价下浮率几乎一致、S-04 清单项目构成
+  交并比高度一致、P-02 人员类元数据跨投标人重合、P-03 关联线索中的亲属关系描述；
+  全部为人工复核线索，不自动认定串通、违法或投标无效。
+
+### 约束
+- 当前暂无已确认的“同一项目、多家单位投标”真实测试资料；不读取、不复制用户本机候选资料。
+
+### Added
 - **Excel 报告内置实际公式案例（封面与汇总「状态统计」区块）**：跨表 `COUNTIF`
   逐状态计数（条款核查结论 C 列 Status 九态 + NOT_APPLICABLE 共 10 行 +
   数据源查询日志 B 列 5 态多条件相加）、

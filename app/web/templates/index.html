@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="card">
+  <h2>多投标文件离线审查</h2>
+  <p>读取本机目录中的 txt、md、csv、json、xlsx，识别报价、清单项、文本、结构、元数据和本地关联线索的异常相似模式。</p>
+  <p style="font-size:12px;color:#66788c;">仅输出风险预警与人工复核清单，不自动判定串通投标、违法、资格不合格或投标无效。</p>
+  <a href="/review-bids">进入离线审查</a>
+</div>
 <form method="post" action="/projects">
   <div class="card">
     <h2>项目信息</h2>
