@@ -36,6 +36,16 @@ RULE_IDS = {
     "PAYMENT_ACCOUNT_MATCH": "E-02",
 }
 
+LEGAL_BASIS = {
+    "QUOTE_ARITHMETIC_PATTERN": "《招标投标法实施条例》第40条第4项关于投标报价呈规律性差异的关联线索；统计阈值为工具参数",
+    "UNIFORM_DISCOUNT_RATE": "《招标投标法实施条例》第40条第4项关联线索；账户或控制价口径仍须人工核验",
+    "LINE_ITEM_SET_MATCH": "《招标投标法实施条例》第40条第4项关于投标文件异常一致的关联线索；匹配阈值为工具参数",
+    "SHARED_TEXT_BLOCKS": "《招标投标法实施条例》第40条第4项关于投标文件异常一致的关联线索；分块阈值为工具参数",
+    "PERSON_OVERLAP": "《招标投标法实施条例》第40条第3项关于项目管理成员同一人的法定边界；扩展人员字段仅作线索",
+    "KINSHIP_RELATION": "《招标投标法实施条例》第34条关于单位负责人同一/控股或管理关系的边界；亲属关系本身不等同法定关系",
+    "PAYMENT_ACCOUNT_MATCH": "《招标投标法实施条例》第40条第6项关于保证金从同一单位或个人账户转出的法定边界；资料字段相同不等同转出事实",
+}
+
 # 人员类元数据字段：跨投标人相同值归入 P-02 主体线索，而不是 E-01 电子痕迹。
 PERSON_FIELDS = {"legal_representative", "contact", "contact_phone", "project_manager"}
 
@@ -65,6 +75,7 @@ def _signal(code: str, title: str, scope: str, description: str, evidence: list[
         "title": title,
         "scope": scope,
         "description": description,
+        "legal_basis": LEGAL_BASIS.get(code, "规则说明中的法规/政策背景；本信号仅供人工复核"),
         "evidence": evidence,
         "manual_action": "人工复核原始文件、公开登记信息与电子投标平台留痕后再作判断",
         "auto_conclusion": False,

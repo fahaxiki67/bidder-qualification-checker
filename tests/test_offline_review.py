@@ -100,6 +100,7 @@ def test_review_directory_integrates_new_pattern_signals_and_control_quote(tmp_p
         for signal in result["signals"]
         if signal["code"] in expected
     )
+    assert all(signal["legal_basis"] for signal in result["signals"])
     assert result["summary"]["manual_review_required"] is True
 
     bidders = {bidder["name"]: bidder for bidder in result["bidders"]}
@@ -110,6 +111,23 @@ def test_review_directory_integrates_new_pattern_signals_and_control_quote(tmp_p
         assert len(control_quotes) == 1
         assert control_quotes[0]["label"] == "招标控制价"
         assert bidder["primary_quote"]["kind"] != control_quotes[0]["kind"]
+
+
+def test_payment_account_is_not_exposed_in_public_result(tmp_path):
+    account = "6222021234567890123"
+    for name, total in (("甲公司", 100), ("乙公司", 200)):
+        bidder = tmp_path / name
+        bidder.mkdir()
+        (bidder / "报价.csv").write_text(
+            f"银行账号,{account}\n投标报价,{total}\n", encoding="utf-8"
+        )
+
+    result = review_directory(tmp_path)
+    payload = to_json(result)
+
+    assert "PAYMENT_ACCOUNT_MATCH" in payload
+    assert account not in payload
+    assert all("bank_account" not in bidder["metadata"] for bidder in result["bidders"])
 
 
 def test_csv_quote_uses_first_amount_before_tax_rate(tmp_path):
@@ -125,6 +143,17 @@ def test_csv_quote_uses_first_amount_before_tax_rate(tmp_path):
     bidders = {bidder["name"]: bidder for bidder in result["bidders"]}
     assert bidders["甲"]["primary_quote"]["value"] == 1000
     assert bidders["乙"]["primary_quote"] is None
+
+
+def test_csv_quote_skips_adjacent_unlabeled_amounts(tmp_path):
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.csv").write_text("bid_price,13,100000\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    assert result["bidders"][0]["primary_quote"] is None
+    assert result["bidders"][0]["quotes"] == []
 
 
 def test_text_quote_skips_multiple_amounts_in_one_line(tmp_path):

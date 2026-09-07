@@ -19,7 +19,7 @@
 | macOS 包（P9） | ✅ | arm64 包+.command 启动；本机实测+CI 产物复验双验证 |
 | 收尾（P10） | ✅ | 打 tag 自动出 Release（三平台测试门+双平台打包+五类产物），v0.11.0 实证 |
 
-**质量基线**：当前全量测试为 314 passed、1 skipped（跳过项为 Windows 无创建符号链接权限；全程 mock/fixture，零真实站点依赖）；
+**质量基线**：当前全量测试为 317 passed、1 skipped（跳过项为 Windows 无创建符号链接权限；全程 mock/fixture，零真实站点依赖）；
 CI 六 job + Release 工作流七 job 实跑绿；每阶段一个 tag 发版（v0.3.0→v0.14.0）。
 
 ## 二、红线兑现（全部有测试锁定）
@@ -31,9 +31,9 @@ CI 六 job + Release 工作流七 job 实跑绿；每阶段一个 tag 发版（v
 - 采集与评判分离（adapter 只产客观 Finding，同主体校验两道关卡，评判归 RuleEngine）；
 - 主体一致性：同名不同码不误并、缺码不自动认定、模糊相似转人工（含可追溯留痕）;
 - 项目条款（Project.terms）真正控制规则；行业/集团不适用显式 NOT_APPLICABLE；
-- 离线预警新增 F-05/F-06/S-04/P-02/P-03 已从 `review_directory` 主流程产生；控制价标记为
+- 离线预警新增 F-05/F-06/E-02/S-04/P-02/P-03 已从 `review_directory` 主流程产生；控制价标记为
   `kind=control` 且不作为 `primary_quote`，清单构成只使用 `COMPARABLE` 的 `comparison_key`；
-  所有离线信号均保持 `auto_conclusion=false`，结果保持 `manual_review_required=true`；
+  E-02 账户证据脱敏且不进入公开投标人元数据；所有离线信号均保持 `auto_conclusion=false`，结果保持 `manual_review_required=true`；
 - 不破解验证码、不绕 WAF；真实业务文件只读；内部数据/证据/台账零入库。
 
 ## 三、尚未做成什么（如实清单）

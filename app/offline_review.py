@@ -62,6 +62,18 @@ RULE_IDS = {
 }
 RULE_IDS.update(PATTERN_RULE_IDS)
 
+LEGAL_BASIS = {
+    "QUOTE_NEAR_MATCH": "《招标投标法实施条例》第40条第4项关联线索；相对差异阈值为工具筛选参数",
+    "QUOTE_LOW_DISPERSION": "《招标投标法实施条例》第40条第4项关联线索；离散度阈值为工具筛选参数",
+    "QUOTE_OUTLIER": "发改法规规〔2022〕1117号关于异常低价/严重不平衡报价研判的政策背景；不作法定推定",
+    "SYNCHRONIZED_LINE_ITEMS": "《招标投标法实施条例》第40条第4项关联线索；清单匹配阈值为工具筛选参数",
+    "METADATA_MATCH": "《招标投标法实施条例》第40条第1、4项及《电子招标投标办法》电子留痕要求的辅助线索",
+    "TEXT_EXACT_MATCH": "《招标投标法实施条例》第40条第4项关于投标文件异常一致的关联线索",
+    "TEXT_HIGH_SIMILARITY": "《招标投标法实施条例》第40条第4项关于投标文件异常一致的关联线索；相似度阈值为工具筛选参数",
+    "STRUCTURE_SIMILARITY": "《招标投标法实施条例》第40条第4项关于投标文件异常一致的关联线索",
+    "LOCAL_RELATION_CLUE": "《招标投标法实施条例》第34、39—40条涉及主体关系和串通投标的法定边界；本地线索不等同认定",
+}
+
 _ELECTRONIC_METADATA_FIELDS = {"author", "machine_id", "mac", "ip", "disk_serial", "certificate"}
 
 _AMOUNT_RE = re.compile(
@@ -511,9 +523,18 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
         for pos in label_positions:
             label_match = _LABEL_RE.search(cells[pos])
             tail = cells[pos][label_match.end():] if label_match else ""
-            candidates = _amounts(tail) if tail else (
-                _quote_cell_amounts(cells[pos + 1]) if pos + 1 < len(cells) else []
-            )
+            if tail:
+                candidates = _amounts(tail)
+            elif pos + 1 < len(cells):
+                candidates = _quote_cell_amounts(cells[pos + 1])
+                # 相邻两个裸数字无法判断哪个是报价（常见误配：税率/数量在前），宁可漏报。
+                if (candidates and pos + 2 < len(cells)
+                        and not (_LABEL_RE.search(cells[pos + 2])
+                                 or _QUOTE_NON_AMOUNT_CONTEXT_RE.search(cells[pos + 2]))
+                        and _quote_cell_amounts(cells[pos + 2])):
+                    candidates = []
+            else:
+                candidates = []
             if len(candidates) == 1:
                 label = label_match.group(1) if label_match else cells[pos]
                 quotes.append(_quote(label, candidates[0], source, f"{prefix}第{row_index}行",
@@ -559,12 +580,15 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
             )
             if item:
                 items.append(item)
+    header = rows[header_index] if header_index is not None else (rows[0] if rows else [])
+    public_header = [
+        "[已脱敏]" if index and _field_name(header[index - 1]) == "bank_account" else _json_value(value)
+        for index, value in enumerate(header)
+    ]
     structure = {
         "row_count": len(rows),
         "column_count": max((len(row) for row in rows), default=0),
-        "header": [_json_value(value) for value in (
-            rows[header_index] if header_index is not None else (rows[0] if rows else [])
-        )],
+        "header": public_header,
     }
     return quotes, items, structure, metadata
 
@@ -807,6 +831,7 @@ def _new_signal(code: str, title: str, scope: str, description: str, evidence: l
         "title": title,
         "scope": scope,
         "description": description,
+        "legal_basis": LEGAL_BASIS.get(code, "规则说明中的法规/政策背景；本信号仅供人工复核"),
         "evidence": evidence,
         "manual_action": action,
         "auto_conclusion": False,
@@ -1267,7 +1292,15 @@ def review_directory(input_dir: str | Path, *, project: str = "", relations: str
     relation_path = Path(relations).expanduser().absolute() if relations else None
     bidders = _load_bidder_files(root, result, {relation_path} if relation_path else set())
     # 内部文本只用于本轮比较，不进入最终 JSON，避免报告意外携带整份投标文件。
-    result["bidders"] = [{k: v for k, v in bidder.items() if k != "_internal_files"} for bidder in bidders]
+    result["bidders"] = []
+    for bidder in bidders:
+        public = {k: v for k, v in bidder.items() if k != "_internal_files"}
+        # 银行/保证金账号只用于内部比对；公开结果保留字段名，原值留在用户原始文件中人工核验。
+        public["metadata"] = {
+            field: values for field, values in bidder.get("metadata", {}).items()
+            if field != "bank_account"
+        }
+        result["bidders"].append(public)
     signals: list[dict] = result["signals"]
     _compare_quotes(bidders, signals)
     _compare_line_items(bidders, signals)
@@ -1357,6 +1390,7 @@ def to_markdown(result: dict) -> str:
             "",
             f"- 范围：{_md(signal.get('scope'))}",
             f"- 说明：{_md(signal.get('description'))}",
+            f"- 法律/政策背景：{_md(signal.get('legal_basis'))}",
             f"- 建议：{_md(signal.get('manual_action'))}",
             "- 证据：",
         ])

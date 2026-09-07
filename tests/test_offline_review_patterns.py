@@ -168,6 +168,7 @@ def test_payment_account_match_flags_e02_with_masked_evidence():
     assert _codes(signals) == ["PAYMENT_ACCOUNT_MATCH"]
     assert signals[0]["rule_id"] == "E-02"
     assert signals[0]["level"] == "高"
+    assert "第40条第6项" in signals[0]["legal_basis"]
     evidence_payload = json.dumps(signals[0]["evidence"], ensure_ascii=False)
     assert "6222021234567890123" not in evidence_payload
     assert "6222" in evidence_payload and "0123" in evidence_payload and "*" * 8 in evidence_payload
