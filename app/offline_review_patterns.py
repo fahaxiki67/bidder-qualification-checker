@@ -1,4 +1,4 @@
-"""报价规律与主体关联的增量预警规则（F-05/F-06/S-04/P-02/P-03）。
+"""报价规律与主体关联的增量预警规则（F-05/F-06/S-04/S-05/P-02/P-03）。
 
 本模块是 offline_review 的增量规则层：输入已解析的投标人数据，输出与
 offline_review._new_signal 同构的信号字典。它不访问网络、不修改输入文件、
@@ -9,6 +9,7 @@ offline_review._new_signal 同构的信号字典。它不访问网络、不修�
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from statistics import mean, pstdev
 from typing import Any, Iterable
@@ -20,12 +21,16 @@ PATTERN_THRESHOLDS = {
     "discount_rate_band": 0.001,
     "line_item_jaccard": 0.90,
     "min_line_item_set_common": 8,
+    "shared_block_size": 200,
+    "min_shared_blocks": 3,
+    "shared_block_coverage": 0.10,
 }
 
 RULE_IDS = {
     "QUOTE_ARITHMETIC_PATTERN": "F-05",
     "UNIFORM_DISCOUNT_RATE": "F-06",
     "LINE_ITEM_SET_MATCH": "S-04",
+    "SHARED_TEXT_BLOCKS": "S-05",
     "PERSON_OVERLAP": "P-02",
     "KINSHIP_RELATION": "P-03",
 }
@@ -216,11 +221,51 @@ def kinship_signals(result: dict, bidder_names: set[str]) -> list[dict]:
     return signals
 
 
+def shared_block_signals(bidders: list[dict]) -> list[dict]:
+    """S-05：两份投标文件共享大段连续文本（定长分块指纹，抓整文比对漏掉的部分抄袭）。
+
+    把每份文件去空白小写文本切成固定长度块并取指纹，跨投标人对全部文件求块交集；
+    共块达到数量与覆盖率阈值即提示。块内容不写入证据，避免报告携带投标原文。
+    """
+    size = PATTERN_THRESHOLDS["shared_block_size"]
+    all_blocks: dict[str, set[bytes]] = {}
+    block_total: dict[str, int] = {}
+    for bidder in bidders:
+        blocks: set[bytes] = set()
+        for file in bidder.get("_internal_files", []):
+            text = re.sub(r"\s+", "", str(file.get("text") or "")).lower()
+            for start in range(0, max(0, len(text) - size + 1), size):
+                blocks.add(hashlib.blake2b(text[start:start + size].encode("utf-8"),
+                                           digest_size=12).digest())
+        all_blocks[bidder["name"]] = blocks
+        block_total[bidder["name"]] = len(blocks)
+    signals: list[dict] = []
+    for left, right in _pairwise(list(all_blocks)):
+        shared = all_blocks[left] & all_blocks[right]
+        smaller = min(block_total[left], block_total[right])
+        if not shared or smaller < 1:
+            continue
+        coverage = len(shared) / smaller
+        if len(shared) >= PATTERN_THRESHOLDS["min_shared_blocks"] and \
+                coverage >= PATTERN_THRESHOLDS["shared_block_coverage"]:
+            signals.append(_signal(
+                "SHARED_TEXT_BLOCKS", "投标文件存在大段共用文本", f"{left} ↔ {right}",
+                f"按 {size} 字定长分块后，两家文件共有 {len(shared)} 个相同文本块，"
+                f"占较小一方块数约 {coverage:.1%}；可能来自统一模板、规范条文引用或"
+                "复制同一来源，需核对章节结构、错别字特征与文件形成过程。",
+                [{"bidder": left, "block_count": block_total[left]},
+                 {"bidder": right, "block_count": block_total[right]},
+                 {"shared_blocks": len(shared), "coverage": round(coverage, 4)}],
+                level="中"))
+    return signals
+
+
 def apply(result: dict, bidders: list[dict], signals: list[dict]) -> None:
     """把本模块全部规则追加进 review 信号列表（review_directory 接线入口）。"""
     signals.extend(quote_pattern_signals(bidders))
     signals.extend(uniform_discount_signals(bidders))
     signals.extend(line_item_set_signals(bidders))
+    signals.extend(shared_block_signals(bidders))
     signals.extend(person_overlap_signals(bidders))
     signals.extend(kinship_signals(result, {b["name"] for b in bidders}))
 
@@ -228,5 +273,5 @@ def apply(result: dict, bidders: list[dict], signals: list[dict]) -> None:
 __all__ = [
     "PATTERN_THRESHOLDS", "RULE_IDS", "PERSON_FIELDS",
     "quote_pattern_signals", "uniform_discount_signals", "line_item_set_signals",
-    "person_overlap_signals", "kinship_signals", "apply",
+    "shared_block_signals", "person_overlap_signals", "kinship_signals", "apply",
 ]

@@ -1,4 +1,6 @@
 """增量规则模块 offline_review_patterns 的单元测试（不依赖文件解析与接线）。"""
+import json
+
 from app.offline_review_patterns import (
     PATTERN_THRESHOLDS,
     apply,
@@ -6,6 +8,7 @@ from app.offline_review_patterns import (
     line_item_set_signals,
     person_overlap_signals,
     quote_pattern_signals,
+    shared_block_signals,
     uniform_discount_signals,
 )
 
@@ -125,6 +128,34 @@ def test_kinship_relation_flags_p03_only_for_known_bidders():
 
     unknown = kinship_signals(result, {"戊公司"})
     assert unknown == []
+
+
+def _bidder_with_text(name, *texts):
+    bidder = _bidder(name)
+    bidder["_internal_files"] = [{"public": {"path": f"{name}_{i}.txt"}, "text": text}
+                                 for i, text in enumerate(texts)]
+    return bidder
+
+
+def test_shared_block_text_flags_s05_for_partial_plagiarism():
+    # 三段互异的 200 字共享块（对齐块边界），避免重复内容被块集合去重。
+    shared = ("共享段落一" + "一" * 195) + ("共享段落二" + "二" * 195) + ("共享段落三" + "三" * 195)
+    left = _bidder_with_text("甲", "甲" * 200 + shared + "丙" * 200)
+    right = _bidder_with_text("乙", "乙" * 200 + shared + "丁" * 200)
+    signals = shared_block_signals([left, right])
+    assert _codes(signals) == ["SHARED_TEXT_BLOCKS"]
+    assert signals[0]["rule_id"] == "S-05"
+    assert signals[0]["level"] == "中"
+    evidence_payload = json.dumps(signals[0]["evidence"], ensure_ascii=False)
+    # 隐私边界：块内容与原文不得写入证据。
+    assert "共享段落" not in evidence_payload and "text" not in evidence_payload
+
+    unrelated = [
+        _bidder_with_text("甲", "戊" * 800),
+        _bidder_with_text("乙", "己" * 800),
+    ]
+    assert shared_block_signals(unrelated) == []
+    assert shared_block_signals([_bidder_with_text("甲", "短文本")]) == []
 
 
 def test_apply_aggregates_all_rules_and_keeps_manual_boundary():
