@@ -1,6 +1,6 @@
 """离线多投标文件风险预警。
 
-本模块只读本地 txt/md/csv/json/xlsx，输出可追溯的客观相似性信号。
+本模块只读本地 txt/md/csv/json/xlsx/pdf，输出可追溯的客观相似性信号。
 它不访问网络、不修改输入文件、不判定串通投标或投标无效；所有信号均须人工复核。
 """
 from __future__ import annotations
@@ -14,6 +14,10 @@ import math
 import os
 import re
 import stat
+import shutil
+import subprocess
+import sys
+import time
 import zipfile
 from datetime import datetime, timezone
 from itertools import islice
@@ -41,7 +45,10 @@ MAX_INPUT_BYTES = 1024 * 1024 * 1024
 MAX_XLSX_ZIP_MEMBERS = 2_000
 MAX_XLSX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_XLSX_ENTRY_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
-MAX_PDF_PAGES = 500
+MAX_PDF_PAGES = 2000
+MAX_PDF_OCR_PAGES = 50
+MAX_PDF_OCR_SECONDS = 120
+MAX_PDF_TEXT_CHARS = 10_000_000
 MAX_JSON_DEPTH = 100
 MAX_JSON_NODES = 100_000
 MAX_XLSX_AUDIT_CELLS = 200_000
@@ -90,6 +97,7 @@ _AMOUNT_RE = re.compile(
     r"(?:\s*(?:亿元|亿|万元|万|元))?(?![\w.,])",
     re.IGNORECASE,
 )
+_AMBIGUOUS_DECIMAL_RE = re.compile(r"(?<![\w.,，])\d{1,3}\.\d{3}(?!\d)")
 _CONTROL_LABEL_RE = re.compile(
     r"招标控制价|最高限价|控制价|control(?:\s*price)?|ceiling(?:\s*price)?", re.IGNORECASE
 )
@@ -273,15 +281,32 @@ def _error_file_public(path: Path, source: str) -> dict:
     if not stat.S_ISREG(info.st_mode) or path.is_symlink():
         return public
     public["size_bytes"] = int(info.st_size)
-    if info.st_size > MAX_FILE_BYTES:
+    limit = MAX_PDF_FILE_BYTES if path.suffix.lower() == ".pdf" else MAX_FILE_BYTES
+    if info.st_size > limit:
         return public
     try:
-        raw = _read_limited(path)
+        size, digest = _stream_sha256(path, limit)
     except ValueError:
         return public
-    public["size_bytes"] = len(raw)
-    public["sha256"] = hashlib.sha256(raw).hexdigest()
+    public["size_bytes"] = size
+    public["sha256"] = digest
     return public
+
+
+def _stream_sha256(path: Path, limit: int) -> tuple[int, str]:
+    """流式读取并计算摘要，避免大 PDF 解析失败时再整体复制到内存。"""
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError(f"文件超过 {limit // 1024 // 1024} MB 限制")
+                digest.update(chunk)
+    except OSError as exc:
+        raise ValueError(f"文件读取失败：{exc}") from exc
+    return size, digest.hexdigest()
 
 
 def _check_xlsx_archive(path: Path) -> None:
@@ -350,8 +375,8 @@ def _parse_amount(value: Any) -> float | None:
         elif last_separator in ",，" and len(fraction) == 3:
             normalized = sign + unsigned.replace(last_separator, "")
         elif last_separator == "." and len(fraction) == 3 and not unsigned.startswith("0"):
-            # 单个点后三位在金额文本中按千分位处理；0.123 保留为小数。
-            normalized = sign + unsigned.replace(".", "")
+            # 无区域口径时，123.456 可能是小数也可能是千分位，不猜金额。
+            return None
         else:
             normalized = f"{sign}{unsigned[:last].replace(',', '').replace('，', '')}.{fraction}"
     else:
@@ -493,8 +518,11 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
         label_match = _LABEL_RE.search(line)
         if label_match:
             tail = line[label_match.end():]
-            candidates = _amounts(tail)
-            if len(candidates) == 1:
+            matches = list(_AMOUNT_RE.finditer(tail))
+            candidates = [_parse_amount(match.group(0)) for match in matches]
+            # 一个歧义/无法解析的数字与另一个合法数字同现时，整行不猜报价。
+            if (len(matches) == 1 and candidates[0] is not None
+                    and not _AMBIGUOUS_DECIMAL_RE.search(tail)):
                 value = candidates[0]
                 label = label_match.group(1)
                 quotes.append(_quote(label, value, source, f"第{index}行", line, _quote_kind(label)))
@@ -531,6 +559,13 @@ def _quote_parse_warnings(text: str) -> list[dict]:
             warnings.append({
                 "locator": f"第{index}行",
                 "reason": "报价币种疑似为非人民币，未纳入报价比较",
+                "raw": _redact_account_text(line[:500]),
+            })
+        elif (_AMBIGUOUS_DECIMAL_RE.search(tail)
+              or any(_parse_amount(m.group()) is None for m in _AMOUNT_RE.finditer(tail))):
+            warnings.append({
+                "locator": f"第{index}行",
+                "reason": "报价数字分隔格式存在歧义，未纳入报价比较，待核对原文口径",
                 "raw": _redact_account_text(line[:500]),
             })
     return warnings
@@ -736,16 +771,218 @@ def _primary_quote(quotes: list[dict]) -> dict | None:
         return None
     best_rank = max(_quote_rank(quote) for quote in candidates)
     best = [quote for quote in candidates if _quote_rank(quote) == best_rank]
+    # 同等级时文本层比 OCR 更可靠；OCR 只补足文本层未覆盖的内容。
+    text_layer = [quote for quote in best if quote.get("extraction_method") == "text"]
+    if text_layer:
+        best = text_layer
     values = {float(quote["value"]) for quote in best}
     # 同优先级出现不同金额时不猜主报价；即使同值，也保留第一份可追溯来源。
     return best[0] if len(values) == 1 else None
 
 
+def _pdf_ocr_tools() -> tuple[str, str, str, dict]:
+    """定位 OCR 工具并只校验一次语言包；返回渲染器、引擎、语言和进程环境。"""
+    bundle = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "ocr"
+    extension = ".exe" if os.name == "nt" else ""
+    renderer_path = bundle / "renderer" / ("pdftoppm" + extension)
+    engine_path = bundle / "engine" / ("tesseract" + extension)
+    renderer = str(renderer_path) if renderer_path.is_file() else shutil.which("pdftoppm")
+    engine = str(engine_path) if engine_path.is_file() else shutil.which("tesseract")
+    if not renderer or not engine:
+        raise ValueError("OCR 需要本机安装 Poppler(pdftoppm) 和 Tesseract，并配置 PATH")
+    options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    if engine_path.is_file():
+        environment = {**os.environ, "TESSDATA_PREFIX": str(bundle / "tessdata")}
+        if os.name == "posix":
+            environment["DYLD_LIBRARY_PATH"] = str(bundle / "lib")
+        options["env"] = environment
+    languages = subprocess.run(
+        [engine, "--list-langs"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=3, check=True, **options,
+    ).stdout.decode("utf-8", errors="replace").splitlines()
+    if not {"chi_sim", "eng"}.issubset({line.strip() for line in languages}):
+        raise ValueError("OCR 缺少 chi_sim/eng 语言包，请安装后重试")
+    return renderer, engine, "chi_sim+eng", options
+
+
+def _has_large_pdf_image(resources: Any, depth: int = 0) -> bool:
+    """识别整页扫描图，忽略小 logo，递归处理常见 Form XObject。"""
+    if depth > 2 or resources is None:
+        return False
+    resources = resources.get_object() if hasattr(resources, "get_object") else resources
+    objects = resources.get("/XObject", {}) if hasattr(resources, "get") else {}
+    objects = objects.get_object() if hasattr(objects, "get_object") else objects
+    for reference in getattr(objects, "values", lambda: ())():
+        image = reference.get_object() if hasattr(reference, "get_object") else reference
+        if image.get("/Subtype") == "/Image" and int(image.get("/Width", 0)) * int(image.get("/Height", 0)) >= 500_000:
+            return True
+        if image.get("/Subtype") == "/Form" and _has_large_pdf_image(image.get("/Resources"), depth + 1):
+            return True
+    return False
+
+
+def _ocr_pdf_page(path: Path, page_number: int, timeout: float,
+                  tools: tuple[str, str, str, dict] | None = None) -> str:
+    """逐页在内存中转图并识别，不在原资料旁落盘。"""
+    renderer, engine, language, options = tools or _pdf_ocr_tools()
+    started = time.monotonic()
+    rendered = subprocess.run(
+        [renderer, "-f", str(page_number), "-l", str(page_number), "-singlefile",
+         "-png", "-scale-to", "3000", str(path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=max(0.01, timeout - (time.monotonic() - started)), check=True, **options,
+    )
+    if not rendered.stdout:
+        raise ValueError("PDF 页面渲染未输出图像")
+    recognized = subprocess.run(
+        [engine, "stdin", "stdout", "-l", language, "--psm", "3"],
+        input=rendered.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=max(0.01, timeout - (time.monotonic() - started)), check=True, **options,
+    )
+    return recognized.stdout.decode("utf-8", errors="replace")
+
+
+def _pdf_content(path: Path, source: str) -> tuple[str, list, list, dict, list]:
+    from pypdf import PdfReader
+
+    parts, quotes, items, pages, warnings = [], [], [], [], []
+    ocr_count, ocr_seconds, text_chars = 0, 0.0, 0
+    ocr_tools, ocr_tool_error = None, None
+    # ponytail: 单文件顺序 OCR，50 页/120 秒预算；更大扫描件需另行分批。
+    with path.open("rb") as stream:
+        reader = PdfReader(stream)
+        page_count = len(reader.pages)
+        for index in range(min(page_count, MAX_PDF_PAGES)):
+            if text_chars >= MAX_PDF_TEXT_CHARS:
+                break
+            number = index + 1
+            text, text_layer, recognized, method, reason, page_state = "", "", "", None, "", "OK"
+            started = None
+            try:
+                page = reader.pages[index]
+                text = page.extract_text() or ""
+                text_layer = text
+                # 大图通常是扫描页；小图（logo/印章）不触发重复 OCR。
+                needs_ocr = not text.strip() or _has_large_pdf_image(page.get("/Resources"))
+            except Exception as exc:
+                needs_ocr = True
+                reason = f"文本层提取失败：{type(exc).__name__}"
+            if needs_ocr:
+                if ocr_count >= MAX_PDF_OCR_PAGES or ocr_seconds >= MAX_PDF_OCR_SECONDS:
+                    reason = "OCR 页数或时间预算已用完"
+                    page_state = "UNPROCESSED" if not text.strip() else "PARTIAL"
+                else:
+                    if ocr_tool_error:
+                        reason = ocr_tool_error
+                        page_state = "OCR_FAILED"
+                    else:
+                        try:
+                            if ocr_tools is None:
+                                ocr_tools = _pdf_ocr_tools()
+                            started = time.monotonic()
+                            ocr_count += 1
+                            recognized = _ocr_pdf_page(path, number, min(30, MAX_PDF_OCR_SECONDS - ocr_seconds), ocr_tools)
+                            if recognized.strip():
+                                text = text + "\n" + recognized if text.strip() else recognized
+                                method, reason = "ocr", ""
+                            else:
+                                reason = "文本层或 OCR 未获得完整可识别文字（可能为空白页或扫描质量不足）"
+                                page_state = "OCR_EMPTY"
+                        except Exception as exc:
+                            reason = str(exc) if isinstance(exc, ValueError) else f"OCR 失败：{type(exc).__name__}（核对工具及 chi_sim/eng 语言包）"
+                            page_state = "OCR_FAILED"
+                            if ocr_tools is None:
+                                ocr_tool_error = reason
+                        finally:
+                            if started is not None:
+                                ocr_seconds += time.monotonic() - started
+            if text_chars + len(text) > MAX_PDF_TEXT_CHARS:
+                text = text[:MAX_PDF_TEXT_CHARS - text_chars]
+                reason = "PDF 文本字符预算已用完，本页未完整读取"
+                page_state = "UNPROCESSED"
+            if text.strip() and method is None:
+                method = "text"
+            page_record = {"page": number, "method": method, "status": page_state}
+            if reason:
+                page_record["error"] = reason
+            pages.append(page_record)
+            if reason:
+                warnings.append({"locator": f"第{number}页", "reason": reason, "raw": path.name})
+            if method == "ocr":
+                warnings.append({"locator": f"第{number}页", "reason": "已使用 OCR；金额、单位及文字须对照原页人工复核", "raw": path.name})
+            # 文本层与 OCR 分开解析、分别留来源，不能让 OCR 误读覆盖原有文本报价。
+            page_quotes = []
+            for page_text, extraction_method in ((text_layer, "text"), (recognized, "ocr")):
+                if not page_text.strip():
+                    continue
+                # 只连接独立报价标签与紧邻的单个金额；不跨页、表头或多个裸数字猜测。
+                lines = page_text.splitlines()
+                for position in range(len(lines) - 1):
+                    label = lines[position].strip().rstrip(":： ")
+                    following = lines[position + 1].strip()
+                    if (_EXPLICIT_TOTAL_LABEL_RE.fullmatch(label) or _CONTROL_LABEL_RE.fullmatch(label)) and _AMOUNT_RE.fullmatch(following):
+                        if position + 2 < len(lines) and _AMOUNT_RE.fullmatch(lines[position + 2].strip()):
+                            continue
+                        lines[position] += " " + following
+                        lines[position + 1] = ""
+                parse_text = "\n".join(lines)
+                q, i = _text_quotes(parse_text, source)
+                for entry in q + i:
+                    entry["locator"] = f"第{number}页 {entry['locator']}"
+                    entry["extraction_method"] = extraction_method
+                    if extraction_method == "ocr":
+                        entry["raw"] = "[OCR 识别值，原文请按页码核对]"
+                for warning in _quote_parse_warnings(parse_text):
+                    warning["locator"] = f"第{number}页 {warning['locator']}"
+                    if extraction_method == "ocr":
+                        warning["raw"] = "[OCR 识别内容，原文请按页码核对]"
+                    warnings.append(warning)
+                page_quotes.extend(q)
+                quotes.extend(q)
+                items.extend(i)
+            text_values = {quote["value"] for quote in page_quotes
+                           if quote.get("extraction_method") == "text" and _quote_rank(quote) >= 0}
+            ocr_values = {quote["value"] for quote in page_quotes
+                          if quote.get("extraction_method") == "ocr" and _quote_rank(quote) >= 0}
+            if text_values and ocr_values and text_values != ocr_values:
+                conflict = "文本层与 OCR 报价不一致，主报价优先文本层，须核对原页"
+                page_state = "PARTIAL"
+                page_record["status"] = page_state
+                page_record["error"] = conflict
+                warnings.append({"locator": f"第{number}页", "reason": conflict, "raw": path.name})
+            parts.append(text)
+            text_chars += len(text)
+    unread = page_count - len(pages)
+    if not page_count:
+        warnings.append({"locator": "全文", "reason": "PDF 没有可读取页面", "raw": path.name})
+    if unread:
+        warnings.append({"locator": f"第{len(pages) + 1}—{page_count}页", "reason": f"PDF 读取预算达到上限，{unread} 页未处理", "raw": path.name})
+    failed_pages = sum(p["status"] in {"OCR_FAILED", "OCR_EMPTY"} for p in pages)
+    unprocessed_pages = unread + sum(p["status"] == "UNPROCESSED" for p in pages)
+    partial_pages = sum(p["status"] == "PARTIAL" for p in pages)
+    structure = {"page_count": page_count, "extracted_pages": len(pages),
+                 "text_truncated": bool(unprocessed_pages), "unprocessed_pages": unprocessed_pages,
+                 "ocr_pages": sum(p["method"] == "ocr" for p in pages),
+                 "text_layer_pages": sum(p["method"] == "text" for p in pages),
+                 "ocr_failed_pages": sum(p["status"] == "OCR_FAILED" for p in pages),
+                 "ocr_empty_pages": sum(p["status"] == "OCR_EMPTY" for p in pages),
+                 "partial_pages": partial_pages,
+                 "failed_pages": failed_pages, "pages": pages,
+                 "partial": bool(unprocessed_pages) or bool(failed_pages) or bool(partial_pages) or not pages}
+    return "\n".join(parts), quotes, items, structure, warnings
+
+
 def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list[dict], dict, dict[str, list[dict]], str | None]:
     """读取一个文件，返回 public meta、compare text、quotes、items、structure、metadata、error。"""
     suffix = path.suffix.lower()
-    raw = _read_limited(path, limit=MAX_PDF_FILE_BYTES if suffix == ".pdf" else MAX_FILE_BYTES)
-    digest = hashlib.sha256(raw).hexdigest()
+    if suffix == ".pdf":
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_PDF_FILE_BYTES:
+            raise ValueError("PDF 非普通文件、符号链接或超过 600 MB 限制")
+        size, digest = _stream_sha256(path, MAX_PDF_FILE_BYTES)
+        raw = b""
+    else:
+        raw = _read_limited(path)
+        size, digest = len(raw), hashlib.sha256(raw).hexdigest()
     quotes: list[dict] = []
     items: list[dict] = []
     structure: dict = {}
@@ -767,31 +1004,7 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
         structure = {"json_type": type(data).__name__, "top_level_keys": list(data)[:50] if isinstance(data, dict) else []}
         text = json.dumps(data, ensure_ascii=False, sort_keys=True)
     elif suffix == ".pdf":
-        # 真实投标经济标多为计价软件导出的 PDF；只读文本层，扫描件如实标注。
-        try:
-            from pypdf import PdfReader
-        except ImportError as exc:  # pragma: no cover - package declares dependency
-            raise ValueError("读取 pdf 需要 pypdf") from exc
-        import io as _io
-        reader = PdfReader(_io.BytesIO(raw))
-        page_count = len(reader.pages)
-        extracted = min(page_count, MAX_PDF_PAGES)
-        parts = []
-        for index in range(extracted):
-            try:
-                parts.append(reader.pages[index].extract_text() or "")
-            except Exception as exc:  # 单页失败不中断
-                parts.append(f"\n[第{index + 1}页提取失败: {type(exc).__name__}]\n")
-        text = "\n".join(parts)
-        quotes, items = _text_quotes(text, source)
-        structure = {"page_count": page_count, "extracted_pages": extracted,
-                     "text_truncated": page_count > extracted}
-        if not text.strip():
-            parse_warnings.append({
-                "locator": "全文",
-                "reason": f"PDF 未提取到文本层（疑似扫描件，共 {page_count} 页），未纳入报价与相似度比较",
-                "raw": path.name,
-            })
+        text, quotes, items, structure, parse_warnings = _pdf_content(path, source)
     elif suffix == ".xlsx":
         try:
             from openpyxl import load_workbook
@@ -898,17 +1111,18 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
     public = {
         "path": source,
         "extension": suffix,
-        "size_bytes": len(raw),
+        "size_bytes": size,
         "sha256": digest,
         "normalized_sha256": hashlib.sha256(_norm_text(text).encode("utf-8")).hexdigest(),
-        "parse_status": "OK",
+        "parse_status": "PARTIAL" if structure.get("partial") else "OK",
         "text_chars": len(text),
         "quote_count": len(_dedupe_quotes(quotes)),
         "line_item_count": len(_dedupe_items(items)),
         "structure": structure,
         "metadata_fields": sorted(metadata),
     }
-    parse_warnings.extend(_quote_parse_warnings(text))
+    if suffix != ".pdf":
+        parse_warnings.extend(_quote_parse_warnings(text))
     if parse_warnings:
         public["parse_warnings"] = parse_warnings
     return public, compare_text, _dedupe_quotes(quotes), _dedupe_items(items), structure, metadata, None
@@ -1291,8 +1505,9 @@ def _load_bidder_files(root: Path, result: dict, excluded_paths: set[Path] | Non
                 result["parse_errors"].append(parse_error)
             if public.get("parse_status") == "UNSUPPORTED":
                 result["unsupported_files"].append(public)
-            if public.get("parse_status") == "OK":
-                internal_files.append({"public": public, "text": text, "structure": structure})
+            if public.get("parse_status") in {"OK", "PARTIAL"}:
+                if public.get("parse_status") == "OK":
+                    internal_files.append({"public": public, "text": text, "structure": structure})
                 quotes.extend(q)
                 items.extend(i)
                 _merge_metadata(metadata, file_meta)
@@ -1340,6 +1555,11 @@ def review_directory(input_dir: str | Path, *, project: str = "", relations: str
             "thresholds": THRESHOLDS,
             "limits": {
                 "max_file_bytes": MAX_FILE_BYTES,
+                "max_pdf_file_bytes": MAX_PDF_FILE_BYTES,
+                "max_pdf_pages": MAX_PDF_PAGES,
+                "max_pdf_ocr_pages": MAX_PDF_OCR_PAGES,
+                "max_pdf_ocr_seconds": MAX_PDF_OCR_SECONDS,
+                "max_pdf_text_chars": MAX_PDF_TEXT_CHARS,
                 "max_input_files": MAX_INPUT_FILES,
                 "max_input_bytes": MAX_INPUT_BYTES,
                 "max_xlsx_zip_members": MAX_XLSX_ZIP_MEMBERS,
@@ -1409,6 +1629,7 @@ def review_directory(input_dir: str | Path, *, project: str = "", relations: str
         "bidder_count": len(bidders),
         "file_count": sum(len(b["files"]) for b in bidders),
         "parsed_file_count": sum(sum(1 for f in b["files"] if f.get("parse_status") == "OK") for b in bidders),
+        "partial_file_count": sum(sum(1 for f in b["files"] if f.get("parse_status") == "PARTIAL") for b in bidders),
         "quote_count": sum(len(b["quotes"]) for b in bidders),
         "signal_count": len(signals),
         "unsupported_file_count": len(result["unsupported_files"]),
@@ -1455,7 +1676,7 @@ def to_markdown(result: dict) -> str:
         "| 指标 | 数值 |",
         "|---|---:|",
         f"| 投标人 | {summary.get('bidder_count', 0)} |",
-        f"| 文件 | {summary.get('file_count', 0)}（成功解析 {summary.get('parsed_file_count', 0)}） |",
+        f"| 文件 | {summary.get('file_count', 0)}（完整解析 {summary.get('parsed_file_count', 0)}；部分解析 {summary.get('partial_file_count', 0)}） |",
         f"| 已识别报价 | {summary.get('quote_count', 0)} |",
         f"| 清单明细（可比/数据不足） | {summary.get('comparable_line_item_count', 0)} / {summary.get('insufficient_line_item_count', 0)} |",
         f"| 风险信号 | {summary.get('signal_count', 0)} |",

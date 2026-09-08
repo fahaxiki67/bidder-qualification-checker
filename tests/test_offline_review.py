@@ -255,7 +255,8 @@ def test_note_lines_never_produce_quote_or_control_evidence(tmp_path):
     assert bidder_info["primary_quote"]["value"] == 100000
 
 
-def test_pdf_text_layer_is_parsed_and_blank_pdf_flagged(tmp_path):
+def test_pdf_text_layer_is_parsed_and_blank_pdf_flagged(tmp_path, monkeypatch):
+    monkeypatch.setattr(offline_review, "_ocr_pdf_page", lambda *args: "")
     import io
 
     from pypdf import PdfWriter
@@ -306,7 +307,7 @@ def test_pdf_text_layer_is_parsed_and_blank_pdf_flagged(tmp_path):
     result2 = review_directory(tmp_path)
     scanned = next(f for b in result2["bidders"] for f in b["files"]
                    if f["path"].endswith("扫描件.pdf"))
-    assert scanned["parse_status"] == "OK"
+    assert scanned["parse_status"] == "PARTIAL"
     assert any("文本层" in w["reason"] for w in scanned.get("parse_warnings", []))
 
 

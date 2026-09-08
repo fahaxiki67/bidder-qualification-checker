@@ -1,0 +1,31 @@
+name: Prepare bundled OCR
+description: Install native OCR engines and language data for frozen-package builds
+runs:
+  using: composite
+  steps:
+    - if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        choco install poppler tesseract --yes --no-progress
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $renderer = Get-ChildItem C:\ProgramData\chocolatey\lib\poppler -Filter pdftoppm.exe -Recurse | Select-Object -First 1
+        if (-not $renderer) { throw 'pdftoppm not found' }
+        $renderer.DirectoryName >> $env:GITHUB_PATH
+        'C:\Program Files\Tesseract-OCR' >> $env:GITHUB_PATH
+    - if: runner.os == 'macOS'
+      shell: bash
+      run: brew install poppler tesseract
+    - shell: python
+      run: |
+        import os, pathlib, urllib.request
+        target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'bqc-tessdata'
+        target.mkdir(exist_ok=True)
+        for name in ('chi_sim.traineddata', 'eng.traineddata', 'LICENSE'):
+            urllib.request.urlretrieve(
+                f'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/a8ba5063ab8013372a20e300da0c97ee46b92b07/{name}',
+                target / name)
+        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+            stream.write(f'BQC_BUNDLE_OCR=1\nBQC_TESSDATA_PREFIX={target}\n')
+    - if: runner.os == 'macOS'
+      shell: bash
+      run: python scripts/prepare_ocr_bundle.py

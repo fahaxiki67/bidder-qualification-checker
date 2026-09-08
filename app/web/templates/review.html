@@ -20,7 +20,7 @@
   <h2>审查概况</h2>
   <table>
     <tr><th>输入目录</th><td>{{ result.input_dir }}</td></tr>
-    <tr><th>投标人 / 文件</th><td>{{ result.summary.bidder_count }} / {{ result.summary.file_count }}（成功解析 {{ result.summary.parsed_file_count }}）</td></tr>
+    <tr><th>投标人 / 文件</th><td>{{ result.summary.bidder_count }} / {{ result.summary.file_count }}（完整解析 {{ result.summary.parsed_file_count }}；部分解析 {{ result.summary.partial_file_count }}）</td></tr>
     <tr><th>风险信号</th><td><span class="badge badge-warn">{{ result.summary.signal_count }} 条 · 全部需人工复核</span></td></tr>
     <tr><th>边界</th><td>{{ result.legal_notice.conclusion }}</td></tr>
   </table>

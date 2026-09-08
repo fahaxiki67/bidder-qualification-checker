@@ -33,9 +33,9 @@ def test_readme_version_not_stale():
 
     readme = (Path(app.__file__).resolve().parents[1] / "README.md").read_text(
         encoding="utf-8")
-    m = re.search(r"状态：v([0-9]+\.[0-9]+\.[0-9]+)", readme)
+    m = re.search(r"状态：v([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?)(?=\s|（)", readme)
     assert m, "README 缺少'状态：vX.Y.Z'版本行"
-    assert m.group(1) == app.__version__, (
+    assert m.group(1).replace("-rc.", "rc") == app.__version__, (
         f"README 版本 {m.group(1)} 落后/超前于 app.__version__ {app.__version__}；"
         "更新版本号时必须同步 README 状态行")
 

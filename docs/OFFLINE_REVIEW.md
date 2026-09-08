@@ -11,7 +11,34 @@ Web `/review-bids` 的“输入目录”和“关联线索文件”均指运行 
 `BQC_REVIEW_ROOT` 可指定其他允许目录。`bqc serve --allow-lan` 会显式允许非回环监听，
 仅适合可信网络临时使用，不应把含企业资料的目录暴露给不受信任的网络。
 
-当前支持：`txt`、`md`、`csv`、`json`、`xlsx`、`pdf`（PDF 仅解析文本层）。当前不解析：`xls`、`docx`。
+当前支持：`txt`、`md`、`csv`、`json`、`xlsx`、`pdf`（文本层与本机 OCR）。当前不解析：`xls`、`docx`。
+
+PDF 逐页读取；无文本、含图像或 Form 内容的页面尝试本机 OCR，结果保留页码和 `extraction_method`。
+页眉有文字的扫描页面仍会尝试 OCR。文件采用流式 SHA-256，原始文件保持不变；完整 OCR 文本不写入公开报告。
+同页独立报价标签与紧邻的单个金额可识别，不跨页或多个裸数字猜测。
+
+PDF 限额：600 MB、2000 页、1000 万文本字符；每份最多尝试 OCR 50 页，累计 120 秒，每页最多 30 秒。
+达到上限、提取失败或无法识别时，页级状态及文件标记 `PARTIAL`，报告列出缺口。
+部分解析文件保留已识别报价，但不参与全文相似度比较；已识别主报价不代表已排除未读页的冲突报价。
+OCR 结果只供人工复核，尤其须核对金额小数点、单位、表格列归属和漏字。
+
+Windows/Mac 发布构建设置 `BQC_BUNDLE_OCR=1`，将识别引擎及中英文语言包纳入可执行文件；
+发布前运行 `scripts/smoke_ocr.py`，清空外部工具 PATH 并指向不存在的外部语言目录，验证内置扫描件识别。
+构建需用 `BQC_TESSDATA_PREFIX` 指向包含 `chi_sim.traineddata`、`eng.traineddata` 的目录；缺引擎或语言包时构建失败。
+macOS 构建还会复制并重写 Homebrew OCR 的非系统动态库加载路径，避免用户必须安装 Homebrew。
+源码/Python 安装方式需自行准备外部工具。Mac 已安装 Homebrew 时执行：
+
+```sh
+brew install poppler tesseract tesseract-lang
+pdftoppm -v
+tesseract --list-langs
+```
+
+Windows 源码运行时，安装 Poppler 和 Tesseract 后，将包含 `pdftoppm.exe` 与 `tesseract.exe` 的目录加入 PATH；
+`tesseract --list-langs` 须列出 `chi_sim` 和 `eng`。图形启动的应用也须继承该 PATH。
+依赖缺失时文本页仍可读，需要 OCR 的页面明确提示缺口。OCR 全程本地运行，不上传文件。
+开发环境可设置 `BQC_RUN_OCR_TEST=1` 后运行 `pytest tests/test_pdf_ocr.py -q`，验证实际中文引擎；
+默认回归不依赖外部 OCR 安装，使用模拟结果验证缺失、超时、预算、页码和脱敏路径。
 
 目录约定：一级子目录名为投标人；根目录文件可用 `投标人名称__文件名.ext`。作为
 `--relations` 传入的 CSV/JSON 若位于输入目录内，会被排除在投标文件扫描之外，并单独保留
@@ -50,9 +77,9 @@ Web `/review-bids` 的“输入目录”和“关联线索文件”均指运行 
 仍未列入启用规则。每条新增规则均从 `review_directory` 主流程产生，信号固定为
 `auto_conclusion=false`，整份结果固定为 `manual_review_required=true`。
 
-报价识别中，XLSX 原生数值按单元格类型解析，不先转成文本；PDF 仅解析文本层，扫描件明确标记为未纳入比较；`招标控制价`、`最高限价`、`控制价`单独标记为 `kind=control`，不作为投标人的
+报价识别中，XLSX 原生数值按单元格类型解析，不先转成文本；PDF 读取边界如上；`招标控制价`、`最高限价`、`控制价`单独标记为 `kind=control`，不作为投标人的
 `primary_quote`；主报价优先选择含税/显式投标总价，同一优先级出现不同金额时不猜测并返回空值。
-金额文本支持如 `1.234,56` 和 `1,234.56` 的混合分隔格式；报价标签后出现多个未标注数字时保守跳过，
+金额文本支持如 `1.234,56` 和 `1,234.56` 的混合分隔格式；单个点后三位且非零开头（如 `123.456`）存在口径歧义，跳过并提示核对；报价标签后出现多个未标注数字时保守跳过，
 不跨列猜测税率、数量或其他金额的字段归属。E-02 证据只保留脱敏账号，完整账号不写入公开结果；
 报价、清单和关联线索的公开原文字段也会按账户字段做脱敏处理，原始文件保持不变。
 

@@ -60,8 +60,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pyinstaller
+      - uses: ./.github/actions/setup-ocr
       - name: Build exe (PyInstaller onefile)
         run: pyinstaller bqc.spec --noconfirm
+      - name: Smoke bundled OCR without external PATH
+        run: python scripts/smoke_ocr.py dist/bqc.exe
       - name: Smoke frozen exe (含 %LOCALAPPDATA% 数据目录验证)
         shell: pwsh
         run: |
@@ -97,8 +100,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pyinstaller
+      - uses: ./.github/actions/setup-ocr
       - name: Build binary (PyInstaller onefile, arm64)
         run: pyinstaller bqc.spec --noconfirm
+      - name: Smoke bundled OCR without external PATH
+        run: python scripts/smoke_ocr.py dist/bqc
       - name: Smoke frozen binary
         run: |
           set -e
@@ -164,6 +170,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
+            --prerelease=${{ contains(github.ref_name, '-') }} \
             --title "${GITHUB_REF_NAME} — 投标人资格智能核查系统" \
             --notes-file release_notes.md \
             release/*

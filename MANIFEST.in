@@ -3,4 +3,5 @@
 recursive-include app/config *.yaml
 recursive-include app/web/templates *.html
 recursive-include app *.py
+recursive-include scripts *.py
 include README.md LICENSE
