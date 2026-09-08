@@ -257,6 +257,7 @@ def test_note_lines_never_produce_quote_or_control_evidence(tmp_path):
 
 def test_pdf_text_layer_is_parsed_and_blank_pdf_flagged(tmp_path, monkeypatch):
     monkeypatch.setattr(offline_review, "_ocr_pdf_page", lambda *args: "")
+    monkeypatch.setattr(offline_review, "_pdf_ocr_tools", lambda: ("pdftoppm", "tesseract", "chi_sim+eng", {}))
     import io
 
     from pypdf import PdfWriter

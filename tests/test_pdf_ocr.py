@@ -11,6 +11,12 @@ from reportlab.pdfgen import canvas
 import app.offline_review as review
 
 
+@pytest.fixture
+def fake_ocr_tools(monkeypatch):
+    """让模拟 OCR 测试不依赖 CI 是否安装原生识别工具。"""
+    monkeypatch.setattr(review, "_pdf_ocr_tools", lambda: ("pdftoppm", "tesseract", "chi_sim+eng", {}))
+
+
 def make_pdf(path, pages):
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     document = canvas.Canvas(str(path))
@@ -22,7 +28,7 @@ def make_pdf(path, pages):
     document.save()
 
 
-def test_mixed_pdf_ocr_preserves_page_sources_and_private_text(tmp_path, monkeypatch):
+def test_mixed_pdf_ocr_preserves_page_sources_and_private_text(tmp_path, monkeypatch, fake_ocr_tools):
     path = tmp_path / "甲__报价.pdf"
     make_pdf(path, [["项目说明"], []])
     before = path.read_bytes()
@@ -45,7 +51,7 @@ def test_mixed_pdf_ocr_preserves_page_sources_and_private_text(tmp_path, monkeyp
     assert "仅存在于OCR的私密全文" not in review.to_json(result)
 
 
-def test_mixed_page_conflicting_ocr_quote_keeps_text_layer_quote(tmp_path, monkeypatch):
+def test_mixed_page_conflicting_ocr_quote_keeps_text_layer_quote(tmp_path, monkeypatch, fake_ocr_tools):
     path = tmp_path / "甲__报价.pdf"
     make_pdf(path, [["投标报价: 1000元"]])
     monkeypatch.setattr(review, "_has_large_pdf_image", lambda *args: True)
@@ -61,7 +67,7 @@ def test_mixed_page_conflicting_ocr_quote_keeps_text_layer_quote(tmp_path, monke
     assert any("文本层与 OCR 报价不一致" in item["error"] for item in result["parse_warnings"])
 
 
-def test_failed_ocr_is_partial_and_does_not_claim_full_text_match(tmp_path, monkeypatch):
+def test_failed_ocr_is_partial_and_does_not_claim_full_text_match(tmp_path, monkeypatch, fake_ocr_tools):
     for company in ("甲", "乙"):
         make_pdf(tmp_path / f"{company}__报价.pdf", [["相同的说明文字。" * 20, "投标报价: 5000元"], []])
 
@@ -102,7 +108,7 @@ def test_pdf_split_quote_and_ambiguous_decimal(tmp_path):
     assert "歧义" in review.to_markdown(result)
 
 
-def test_ocr_budget_and_timeout_keep_coverage(tmp_path, monkeypatch):
+def test_ocr_budget_and_timeout_keep_coverage(tmp_path, monkeypatch, fake_ocr_tools):
     make_pdf(tmp_path / "甲__报价.pdf", [[], []])
     monkeypatch.setattr(review, "MAX_PDF_OCR_PAGES", 1)
 

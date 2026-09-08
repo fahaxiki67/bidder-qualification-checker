@@ -22,7 +22,7 @@ runs:
         target.mkdir(exist_ok=True)
         for name in ('chi_sim.traineddata', 'eng.traineddata', 'LICENSE'):
             urllib.request.urlretrieve(
-                f'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/a8ba5063ab8013372a20e300da0c97ee46b92b07/{name}',
+                f'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/{name}',
                 target / name)
         with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
             stream.write(f'BQC_BUNDLE_OCR=1\nBQC_TESSDATA_PREFIX={target}\n')
