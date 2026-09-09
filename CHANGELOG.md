@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.23.0-rc.2] - 2026-09-09
+
+### Fixed
+- **OCR 中文标签匹配修复**：Windows 实测 Tesseract（chi_sim+eng）识别输出会在汉字之间插空格
+  （如「投 标 报 价 :123456.78 元」），报价标签正则匹配不上、扫描件报价被漏提取；
+  现仅压缩汉字之间的空格后再匹配标签与金额，数字/拉丁字符间的空格保持原样，
+  原始识别行仍作为证据保留。`BQC_RUN_OCR_TEST=1` 真实引擎回归通过。
+- **CLI 现在尊重 `BQC_DB` 覆盖**：此前该环境变量仅 Web 服务层实现，CLI 子命令
+  （init-db/import-bans/verify-evidence/report）静默忽略并把库落到默认 `./data/`；
+  现收敛到 `default_db_path()` 单点读取，与文档「优先级始终最高」的承诺一致。
+
+### Verified
+- Windows 本机实测：`BQC_RUN_OCR_TEST=1` 全量 pytest 通过（334 passed，含真实中文 OCR 用例）；
+  `bqc.spec`（`BQC_BUNDLE_OCR=1`）onefile 打包成功，成品在 PATH 为空、语言包目录不可达的
+  环境下通过中文扫描件 OCR 冒烟（quote=123456.78）；数据目录创建/读写/重复运行幂等/
+  跨运行隔离/退出锁释放/清理行为按 UAT 口径逐项验证通过。
+
 ## [0.23.0-rc.1] - 2026-09-08
 
 - PDF 增加本机逐页 OCR（Poppler + Tesseract，需安装中文/英文语言包），支持扫描页及同页图文混合；保留报价页码及识别方式。

@@ -28,4 +28,5 @@ def default_data_dir() -> Path:
 
 
 def default_db_path() -> Path:
-    return default_data_dir() / "bqc.sqlite3"
+    # BQC_DB 覆盖在唯一入口生效，CLI 与 serve 行为一致（文档承诺优先级始终最高）。
+    return Path(os.environ.get("BQC_DB") or default_data_dir() / "bqc.sqlite3")

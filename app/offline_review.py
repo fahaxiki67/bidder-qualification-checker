@@ -98,6 +98,9 @@ _AMOUNT_RE = re.compile(
     re.IGNORECASE,
 )
 _AMBIGUOUS_DECIMAL_RE = re.compile(r"(?<![\w.,，])\d{1,3}\.\d{3}(?!\d)")
+# OCR 引擎常在汉字之间插空格（投 标 报 价），标签匹配前只压缩汉字间的空格；
+# 数字/拉丁字符间的空格保持原样，避免把被扫描断开的数字拼成更大金额。
+_CJK_SPACE_RE = re.compile(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])")
 _CONTROL_LABEL_RE = re.compile(
     r"招标控制价|最高限价|控制价|control(?:\s*price)?|ceiling(?:\s*price)?", re.IGNORECASE
 )
@@ -515,9 +518,11 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
         if not line.strip() or _NOTE_LINE_RE.match(line):
             # 「注：…」说明行的数字是页码/编号/示例，不构成报价证据。
             continue
-        label_match = _LABEL_RE.search(line)
+        # 报价标签在压缩空格后的行上匹配（OCR 会在汉字间插空格），金额与原文证据仍取原始行。
+        compact = _CJK_SPACE_RE.sub("", line)
+        label_match = _LABEL_RE.search(compact)
         if label_match:
-            tail = line[label_match.end():]
+            tail = compact[label_match.end():]
             matches = list(_AMOUNT_RE.finditer(tail))
             candidates = [_parse_amount(match.group(0)) for match in matches]
             # 一个歧义/无法解析的数字与另一个合法数字同现时，整行不猜报价。
