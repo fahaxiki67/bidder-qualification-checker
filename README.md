@@ -12,7 +12,19 @@
 回填注册表，此前真实查询一律返回 MANUAL（待人工核查）；目前可运行的是 mock 演示链路。
 各平台逐项状态见 `docs/ACCEPTANCE.md`；离线文件审查口径见 `docs/OFFLINE_REVIEW.md`。
 
+## 浏览器离线审查（`web/`）
+
+另提供纯浏览器界面：文件在当前浏览器内存中解析、不上传，并支持 `.xls` / `.docx`。
+不替代 `bqc serve` 的本地服务端页面（`app/web/`）。说明见 [`web/README.md`](web/README.md)。
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
 ## 多投标文件离线审查
+
 
 离线审查只读取用户明确提供的本地资料，不联网、不上传、不修改原文件。支持
 `.txt`、`.md`、`.csv`、`.json`、`.xlsx`、`.pdf`（文本层与本机 OCR）；`.xls`、`.docx` 当前不作为输入解析。
