@@ -664,4 +664,46 @@ def test_web_offline_review_entry_reads_only_explicit_directory(tmp_path, monkey
     _write_bid(outside / "乙", 100000)
     rejected = client.post("/review-bids", data={"input_dir": str(outside)})
     assert rejected.status_code == 400
-    assert "BQC_REVIEW_ROOT" in rejected.json()["detail"]
+    assert "BQC_REVIEW_ROOT" in rejected.text
+    assert rejected.headers["content-type"].startswith("text/html")
+
+
+def test_web_offline_review_accepts_subdirectory_of_review_root(tmp_path, monkeypatch):
+    """回归：审查根的“子目录”是正常使用形态。
+
+    背景（2026-09-18 真实界面验收）：限根逻辑写成了
+    ``inside = path == root if allow_root else root in path.parents``，
+    运算符优先级使 allow_root=True 时只放行根目录本身，任何子目录都被 400，
+    /review-bids 页面自加限制起核心流程不可用。锁定语义：根或其子目录均放行。
+    """
+    from fastapi.testclient import TestClient
+    import app.web.server as server
+
+    proj = tmp_path / "某市政项目"
+    _write_bid(proj / "甲", 100000)
+    _write_bid(proj / "乙", 100300)
+    monkeypatch.setenv("BQC_REVIEW_ROOT", str(tmp_path))
+    importlib.reload(server)
+    client = TestClient(server.app)
+
+    result = client.post("/review-bids", data={"input_dir": str(proj), "project": "子目录审查"})
+    assert result.status_code == 200
+    assert "人工复核" in result.text
+    assert "子目录审查" in result.text
+
+
+def test_web_offline_review_error_renders_html_not_bare_json(tmp_path, monkeypatch):
+    """表单页校验失败必须回到人可读的 HTML 页面（含原因与可修正的表单），不得裸输出 JSON。"""
+    from fastapi.testclient import TestClient
+    import app.web.server as server
+
+    monkeypatch.setenv("BQC_REVIEW_ROOT", str(tmp_path))
+    importlib.reload(server)
+    client = TestClient(server.app)
+
+    outside = tmp_path.parent / f"{tmp_path.name}-out2"
+    r = client.post("/review-bids", data={"input_dir": str(outside)})
+    assert r.status_code == 400
+    assert r.headers["content-type"].startswith("text/html")
+    assert "BQC_REVIEW_ROOT" in r.text  # 服务端给出的原因原样保留
+    assert "开始离线审查" in r.text  # 表单仍在，用户可直接修正重试

@@ -15,6 +15,14 @@
   <p style="font-size:12px;color:#66788c;">目录约定：一级子目录名为投标人；根目录文件可使用 bidder__filename.ext。默认仅允许服务当前工作目录内的路径（其他目录请先设置 BQC_REVIEW_ROOT）。只读本地资料，不上传、不联网、不修改原文件。</p>
 </div>
 
+{% if error %}
+<div class="card" role="alert">
+  <h2>无法完成审查</h2>
+  <p style="color:#a04000;font-weight:600;margin:4px 0 8px;">{{ error }}</p>
+  <p style="font-size:12px;color:#66788c;margin:0;">请修正上方输入后重试；其他位置的目录需先设置 BQC_REVIEW_ROOT 并重启服务。</p>
+</div>
+{% endif %}
+
 {% if result %}
 <div class="card">
   <h2>审查概况</h2>
