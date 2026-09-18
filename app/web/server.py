@@ -167,7 +167,12 @@ def _confine_review_path(label: str, value: str, root: Path, *, allow_root: bool
         path = Path(value).expanduser().resolve(strict=False)
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"{label}路径无法解析") from exc
-    inside = path == root if allow_root else root in path.parents
+    # allow_root 语义是“根目录或其子目录均可”：单行条件表达式的优先级会把
+    # allow_root=True 收窄成“仅根目录本身”，子目录全被拒（2026-09-18 界面验收回归）。
+    if allow_root:
+        inside = path == root or root in path.parents
+    else:
+        inside = root in path.parents
     if not inside:
         raise HTTPException(
             status_code=400,
@@ -199,17 +204,29 @@ def offline_review_submit(
     project: str = Form(""),
     relations: str = Form(""),
 ):
-    input_dir = _validate_text("输入目录", input_dir, 1000, required=True)
-    project = _validate_text("项目名称", project, _MAX_NAME)
-    relations = _validate_text("关联线索文件", relations, 1000)
-    root = _review_root()
-    input_dir = _confine_review_path("输入目录", input_dir, root, allow_root=True)
-    if relations:
-        relations = _confine_review_path("关联线索文件", relations, root)
     try:
-        result = review_directory(input_dir, project=project, relations=relations or None)
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=f"无法完成离线审查：{exc}") from exc
+        input_dir = _validate_text("输入目录", input_dir, 1000, required=True)
+        project = _validate_text("项目名称", project, _MAX_NAME)
+        relations = _validate_text("关联线索文件", relations, 1000)
+        root = _review_root()
+        input_dir = _confine_review_path("输入目录", input_dir, root, allow_root=True)
+        if relations:
+            relations = _confine_review_path("关联线索文件", relations, root)
+        try:
+            result = review_directory(input_dir, project=project, relations=relations or None)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"无法完成离线审查：{exc}") from exc
+    except HTTPException as exc:
+        # 表单页错误必须回到人可读的页面：裸 JSON 错误体没有返回入口，
+        # 用户无从知道错在哪、也无法就地修正重试。
+        if exc.status_code != 400:
+            raise
+        return TEMPLATES.TemplateResponse(
+            request, "review.html",
+            {"version": __version__, "result": None, "report": "", "json_text": "",
+             "error": exc.detail},
+            status_code=400,
+        )
     return TEMPLATES.TemplateResponse(
         request, "review.html",
         {"version": __version__, "result": result, "report": to_markdown(result), "json_text": to_json(result)},

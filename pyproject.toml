@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bidder-qualification-checker"
-version = "0.23.0rc2"
+version = "0.23.0rc3"
 description = "投标审查器 — 投标人资格智能核查与多投标文件离线风险预警"
 readme = "README.md"
 requires-python = ">=3.10"

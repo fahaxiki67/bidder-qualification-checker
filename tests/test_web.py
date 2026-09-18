@@ -104,3 +104,14 @@ def test_years_back_clamped_server_side(monkeypatch, tmp_path):
     v = conn.execute("SELECT years_back FROM projects").fetchone()[0]
     conn.close()
     assert v == 10
+
+
+def test_error_badge_is_not_muted_gray():
+    """红线语义：ERROR/TIMEOUT/BLOCKED 徽章不得与 NO_DATA 同灰系。
+
+    查询失败/超时/被拦是最强警戒态，原 #7f8c8d 与 badge-muted(#95a5a6) 几乎同色，
+    界面上"查询失败"看着像"没查到"。锁死配色脱离灰系且不同于 warn/fail。
+    """
+    base = (REPO / "app" / "web" / "templates" / "base.html").read_text("utf-8")
+    assert "#7f8c8d" not in base
+    assert ".badge-err { background:#a04000; }" in base
