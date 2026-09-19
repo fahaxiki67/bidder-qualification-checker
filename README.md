@@ -3,7 +3,7 @@
 > 一体化支持企业资格前审证据链，以及多家投标文件的本地离线风险预警。
 > 原有资格核查入口仍使用 `bqc`，以保持兼容。
 
-**状态：v0.23.0-rc.3 预发布（资格审查与离线多投标文件预警已接入，支持 txt/md/csv/json/xlsx/pdf；真实官网联调 P3R 仍待人工配合——作业清单见 docs/P3R_CHECKLIST.md，双平台验收操作单见 docs/UAT.md）。** 可靠性闭环（P0.5：状态合并/批次隔离/主体一致性/行业门控/terms 控制/SSRF 重定向）已完成； 架构骨架（P1）、本地 Web UI（P2）、
+**状态：v0.23.0-rc.4 预发布（资格审查与离线多投标文件预警已接入，支持 txt/md/csv/json/xlsx/pdf；真实官网联调 P3R 仍待人工配合——作业清单见 docs/P3R_CHECKLIST.md，双平台验收操作单见 docs/UAT.md）。** 可靠性闭环（P0.5：状态合并/批次隔离/主体一致性/行业门控/terms 控制/SSRF 重定向）已完成； 架构骨架（P1）、本地 Web UI（P2）、
 全国数据源 adapter（P3：解析器已实现，真实接口响应格式待联调复核）、集团禁入 adapter（P4）、地区插件机制（P5：四川+广东）、证据系统（P6）、报告（P7：Excel 明细 11 sheet + PDF，bqc report）已完成，
 可靠性闭环（P0/P0.5）已完成；
 按 `WORKPLAN.md` 分阶段推进，进度见 `docs/PROGRESS.md`。

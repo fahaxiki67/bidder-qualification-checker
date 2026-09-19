@@ -119,6 +119,13 @@ _TOTAL_LABEL_RE = re.compile(
     r"不含税总价|合同总价|项目总价|合计|金额|total|bid[_ -]?price|amount|price",
     re.IGNORECASE,
 )
+# 纵排/转置汇总配对只认明确的报价/控制价标签；「合计/金额/amount」等通用词
+# 语义太宽（明细表合计行、普通表头都可能出现），纳入会放大误配。
+_STRICT_QUOTE_LABEL_RE = re.compile(
+    r"(招标控制价|最高限价|控制价|投标总价|投标报价|总报价|含税报价|不含税报价|报价金额|报价合计|含税总价|"
+    r"不含税总价|合同总价|项目总价|total(?:\s*price)?|bid[_ -]?price)",
+    re.IGNORECASE,
+)
 _NOISE_FILE_RE = re.compile(r"^(?:~\$|\.)(?:.*)")
 _NOTE_LINE_RE = re.compile(r"\s*注\s*[:：]")
 _FOREIGN_CURRENCY_RE = re.compile(
@@ -514,7 +521,18 @@ def _merge_metadata(target: dict[str, list[dict]], source: dict[str, list[dict]]
 def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
     quotes: list[dict] = []
     items: list[dict] = []
-    for index, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+
+    def next_value_line(from_index: int) -> tuple[int, str] | None:
+        """from_index 之后第一个非空、非说明行（返回原始行号与原文）。"""
+        for next_index in range(from_index + 1, len(lines) + 1):
+            candidate = lines[next_index - 1]
+            if not candidate.strip() or _NOTE_LINE_RE.match(candidate):
+                continue
+            return next_index, candidate
+        return None
+
+    for index, line in enumerate(lines, 1):
         if not line.strip() or _NOTE_LINE_RE.match(line):
             # 「注：…」说明行的数字是页码/编号/示例，不构成报价证据。
             continue
@@ -531,6 +549,30 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
                 value = candidates[0]
                 label = label_match.group(1)
                 quotes.append(_quote(label, value, source, f"第{index}行", line, _quote_kind(label)))
+            elif (len(matches) == 0 and _STRICT_QUOTE_LABEL_RE.search(compact)):
+                # 纵排汇总（标签独占一行、金额在下一非空行）：仅在下一行除唯一金额外
+                # 没有其他文字/标签/税率语义时按位置配对，任何歧义一律放弃，宁可漏报。
+                paired = next_value_line(index)
+                if paired:
+                    value_index, value_line = paired
+                    value_compact = _CJK_SPACE_RE.sub("", value_line)
+                    value_matches = list(_AMOUNT_RE.finditer(value_compact))
+                    if (len(value_matches) == 1
+                            and not _LABEL_RE.search(value_compact)
+                            and not _QUOTE_NON_AMOUNT_CONTEXT_RE.search(value_compact)
+                            and not _AMBIGUOUS_DECIMAL_RE.search(value_compact)):
+                        continued = next_value_line(value_index)
+                        # 数值行之后还紧跟数字行，更像一列明细数字而非汇总值，不配对。
+                        if continued and _AMOUNT_RE.search(_CJK_SPACE_RE.sub("", continued[1])):
+                            paired = None
+                        if paired:
+                            value = _parse_amount(value_matches[0].group(0))
+                            if value is not None:
+                                label = _STRICT_QUOTE_LABEL_RE.search(compact).group(1)
+                                quotes.append(_quote(
+                                    label, value, source, f"第{value_index}行",
+                                    f"第{index}行:{line.strip()}；第{value_index}行:{value_line.strip()}",
+                                    _quote_kind(label)))
         # 仅把带明显分隔符、且首段像清单名称的行当作明细，降低普通数字误报。
         if any(sep in line for sep in ("\t", "|", ",", "，", ";", "；")):
             cells = [c.strip() for c in re.split(r"\t|\||,|，|;|；", line)]
@@ -646,6 +688,67 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
                 quotes.append(_quote(label, candidates[0], source, f"{prefix}第{row_index}行",
                                      " | ".join(cells), _quote_kind(label)))
         _merge_metadata(metadata, _metadata_from_pairs(zip(cells[::2], cells[1::2])))
+
+    # 纵排/转置汇总表兜底：某行全部非空单元格都是明确报价/控制价标签且整行无数字，
+    # 而紧随其后的第一个非空行每个非空单元格都恰好是一个金额时，按位置一一配对。
+    # 数量不等、单元格多数字、带税率/数量语义或含标签的数值行一律放弃，宁可漏报。
+    def _row_cells(row: list[Any]) -> list[str]:
+        return ["" if cell is None else str(cell).strip() for cell in row]
+
+    rows_cells = [_row_cells(row) for row in rows]
+    for row_index, cells in enumerate(rows_cells, 1):
+        if not any(cells) or any(_NOTE_LINE_RE.match(cell) for cell in cells if cell):
+            continue
+        if any(_AMOUNT_RE.search(cell) for cell in cells if cell):
+            continue
+        label_cells = [
+            (pos, match.group(1))
+            for pos, cell in enumerate(cells) if cell
+            for match in [_STRICT_QUOTE_LABEL_RE.search(cell)] if match
+        ]
+        if not label_cells or len(label_cells) != sum(1 for cell in cells if cell):
+            continue
+        value_index = next(
+            (later for later in range(row_index + 1, len(rows_cells) + 1)
+             if any(rows_cells[later - 1])),
+            None,
+        )
+        if value_index is None:
+            continue
+        value_cells = rows_cells[value_index - 1]
+        if any(_NOTE_LINE_RE.match(cell) for cell in value_cells if cell):
+            continue
+        value_positions = [pos for pos, cell in enumerate(value_cells) if cell]
+        if len(value_positions) != len(label_cells):
+            continue
+        if any(_LABEL_RE.search(value_cells[pos]) for pos in value_positions):
+            continue
+        pair_amounts = []
+        for pos in value_positions:
+            candidates = _quote_cell_amounts(rows[value_index - 1][pos])
+            if len(candidates) != 1:
+                pair_amounts = []
+                break
+            pair_amounts.append(candidates[0])
+        if not pair_amounts:
+            continue
+        # 数值行之后还紧跟含数字的行，更像一列明细数字而非转置汇总值，不配对。
+        after_index = next(
+            (later for later in range(value_index + 1, len(rows_cells) + 1)
+             if any(rows_cells[later - 1])),
+            None,
+        )
+        if after_index is not None and any(
+                _AMOUNT_RE.search(cell) for cell in rows_cells[after_index - 1] if cell):
+            continue
+        label_row_text = " | ".join(cell for cell in cells if cell)
+        value_row_text = " | ".join(value_cells[pos] for pos in value_positions)
+        for (_, label), value in zip(label_cells, pair_amounts):
+            quotes.append(_quote(
+                label, value, source, f"{prefix}第{value_index}行",
+                f"{prefix}标签行[{label_row_text}]；第{value_index}行[{value_row_text}]",
+                _quote_kind(label),
+            ))
 
     # 识别常见的报价清单表头；明细 amount 优先取合价/金额，其次取单价。
     header_index = None
@@ -1303,34 +1406,54 @@ def _compare_metadata(bidders: list[dict], signals: list[dict]) -> None:
                  {"bidder": right, "field": field, "values": sorted(shared)}], level="中"))
 
 
-def _relation_rows(path: Path, raw: bytes | None = None) -> tuple[list[dict], str | None]:
+def _relation_rows(path: Path, raw: bytes | None = None) -> tuple[list[dict], str | None, list[str]]:
+    """解析关联线索文件，返回 (行列表, 致命错误, 不致命的解析提示)。"""
+    warnings: list[str] = []
     try:
         raw = raw if raw is not None else _read_limited(path)
     except ValueError as exc:
-        return [], str(exc)
+        return [], str(exc), warnings
     text = _decode(raw)
     if path.suffix.lower() == ".json":
         try:
             data = json.loads(text)
         except json.JSONDecodeError as exc:
-            return [], f"JSON 解析失败：{exc.msg}"
+            return [], f"JSON 解析失败：{exc.msg}", warnings
         try:
             _json_walk(data, str(path))
         except ValueError as exc:
-            return [], f"JSON 解析受限：{exc}"
+            return [], f"JSON 解析受限：{exc}", warnings
         if isinstance(data, dict):
             data = data.get("relations", data.get("clues", data.get("data", [data])))
         if not isinstance(data, list):
-            return [], "关联线索 JSON 须为数组或包含 relations/clues/data 数组"
-        return [dict(row) for row in data if isinstance(row, dict)], None
+            return [], "关联线索 JSON 须为数组或包含 relations/clues/data 数组", warnings
+        rows = [dict(row) for row in data if isinstance(row, dict)]
+        dropped = len(data) - len(rows)
+        if dropped:
+            warnings.append(f"关联线索 JSON 有 {dropped} 行非对象记录被忽略，未参与线索比对")
+        return rows, None, warnings
     try:
         rows, _ = _rows_from_csv(text)
         if not rows:
-            return [], None
+            return [], None, warnings
         headers = rows[0]
-        return [dict(zip(headers, row)) for row in rows[1:]], None
+        label_counts: dict[str, int] = {}
+        for header in headers:
+            label = _norm_label(header)
+            if label:
+                label_counts[label] = label_counts.get(label, 0) + 1
+        duplicated = sorted(
+            {str(header) for header in headers
+             if _norm_label(header) and label_counts.get(_norm_label(header), 0) > 1}
+        )
+        if duplicated:
+            warnings.append(
+                f"关联线索表头存在重复列名（{', '.join(duplicated)}），"
+                "重复列仅保留最后一个取值，配对结果需人工核对原始表"
+            )
+        return [dict(zip(headers, row)) for row in rows[1:]], None, warnings
     except (csv.Error, ValueError) as exc:
-        return [], f"CSV 解析失败：{exc}"
+        return [], f"CSV 解析失败：{exc}", warnings
 
 
 def _pick(row: dict, aliases: set[str]) -> Any:
@@ -1368,10 +1491,15 @@ def _add_relation_signals(path: Path | None, bidder_names: set[str], signals: li
         })
         return
     result["scan"]["total_bytes"] = observed_bytes
-    rows, error = _relation_rows(path, raw)
+    rows, error, relation_warnings = _relation_rows(path, raw)
     if error:
         result["parse_errors"].append({"path": str(path), "error": error})
         return
+    for warning in relation_warnings:
+        result["parse_warnings"].append({
+            "path": str(path), "bidder": "", "locator": "关联线索文件",
+            "error": warning, "raw": "",
+        })
     result["relation_clues"] = []
     aliases_a = RELATION_LEFT_ALIASES
     aliases_b = RELATION_RIGHT_ALIASES
@@ -1476,8 +1604,12 @@ def _load_bidder_files(root: Path, result: dict, excluded_paths: set[Path] | Non
         if len(relative_parts) >= 2:
             bidder = relative_parts[0].strip() or "未命名投标人"
         else:
-            stem = path.stem.split("__", 1)[0].strip()
-            bidder = stem or root.name or "未命名投标人"
+            # 根目录文件仅在显式「投标人__文件名」前缀时才从文件名取投标人；
+            # 无前缀的根文件按目录名归入单一投标人。若按文件名拆分，同一投标人的
+            # 报价与施组文件会被当成两家投标人互相比较，制造假配对信号。
+            prefix, sep, _ = path.stem.partition("__")
+            bidder = prefix.strip() if sep else ""
+            bidder = bidder or root.name or "未命名投标人"
         files_by_bidder.setdefault(bidder, []).append(path)
     bidders = []
     for name in sorted(files_by_bidder):

@@ -707,3 +707,143 @@ def test_web_offline_review_error_renders_html_not_bare_json(tmp_path, monkeypat
     assert r.headers["content-type"].startswith("text/html")
     assert "BQC_REVIEW_ROOT" in r.text  # 服务端给出的原因原样保留
     assert "开始离线审查" in r.text  # 表单仍在，用户可直接修正重试
+
+
+def test_root_files_without_explicit_prefix_stay_one_bidder(tmp_path):
+    """回归（2026-09-20 合成探针）：同一投标人的多个无前缀根文件不得按文件名拆成
+    多家“投标人”互相比较——那会凭空制造「报价 ↔ 施工组织」式假 F-01 信号。
+
+    语义按 review_directory 文档锁定：无「投标人__文件名」前缀的根文件一律归入
+    根目录名对应的单一投标人。"""
+    (tmp_path / "报价.txt").write_text("投标总价：1000000\n", encoding="utf-8")
+    (tmp_path / "施工组织.md").write_text(
+        "# 施工组织设计\n投标总价：1000000\n第一节 总体部署\n" + "内容" * 60 + "\n",
+        encoding="utf-8",
+    )
+
+    result = review_directory(tmp_path)
+
+    assert [b["name"] for b in result["bidders"]] == [tmp_path.name]
+    assert len(result["bidders"][0]["files"]) == 2
+    assert not [s for s in result["signals"] if s["code"].startswith("F-")]
+
+
+def test_root_files_with_explicit_prefix_still_use_prefix(tmp_path):
+    """「投标人__文件名.ext」前缀约定保持不变（README 布局向后兼容）。"""
+    (tmp_path / "甲__报价.csv").write_text("投标总价,1000000\n", encoding="utf-8")
+    (tmp_path / "乙__报价.csv").write_text("投标总价,1001000\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    assert {b["name"] for b in result["bidders"]} == {"甲", "乙"}
+    assert any(s["code"] == "QUOTE_NEAR_MATCH" for s in result["signals"])
+
+
+def test_vertical_summary_pairs_label_line_with_next_amount_line(tmp_path):
+    """回归：纵排汇总（标签独占一行、金额在下一非空行）此前产不出任何报价。
+
+    常见于导出的单列报价汇总。配对必须可追溯：locator 指向金额所在行，
+    证据原文同时保留标签行与金额行。"""
+    (tmp_path / "甲").mkdir()
+    (tmp_path / "乙").mkdir()
+    (tmp_path / "甲" / "报价.txt").write_text(
+        "投标报价汇总表\n\n投标总价\n1000000 元\n", encoding="utf-8")
+    (tmp_path / "乙" / "报价.txt").write_text(
+        "投标报价汇总表\n\n投标总价\n1001000 元\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+    quotes = {b["name"]: b["quotes"] for b in result["bidders"]}
+    assert [q["value"] for q in quotes["甲"]] == [1000000.0]
+    assert quotes["甲"][0]["locator"] == "第4行"
+    assert "第3行:投标总价" in quotes["甲"][0]["raw"]
+    assert any(s["code"] == "QUOTE_NEAR_MATCH" for s in result["signals"])
+
+
+def test_transposed_summary_pairs_labels_with_value_row_by_position(tmp_path):
+    """回归：转置汇总（标签行+数值行）此前产不出任何报价。
+
+    配对须按位置一一对应；控制价只记 kind=control，不得成为主报价，
+    也不参与 F-01（控制价两家本来就相同）。"""
+    import io
+
+    import openpyxl
+
+    for name, values in (("甲", (500, 1000000)), ("乙", (500, 1001000))):
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.append(["招标控制价", "投标总价"])
+        sheet.append(list(values))
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "报价.xlsx").write_bytes(buffer.getvalue())
+
+    result = review_directory(tmp_path)
+    for bidder in result["bidders"]:
+        kinds = {q["label"]: q["kind"] for q in bidder["quotes"]}
+        assert kinds == {"招标控制价": "control", "投标总价": "explicit_total"}
+        assert bidder["primary_quote"]["value"] in (1000000.0, 1001000.0)
+    assert any(s["code"] == "QUOTE_NEAR_MATCH" for s in result["signals"])
+
+
+def test_vertical_pairing_skips_when_amounts_continue_as_a_column(tmp_path):
+    """回归：数值行之后仍紧跟数字行时更像一列明细数字，不得把列首数字当总价。
+
+    源自合成探针 Q8：公式单元格被读取层丢弃后，标签行下方留下明细数字列，
+    曾被配成「投标总价=500」的假报价。守卫生效时不产报价，公式提示保留。"""
+    import io
+
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["投标总价", "=SUM(B2:B3)"])
+    sheet.append([None, 500])
+    sheet.append([None, 999500])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    (tmp_path / "甲").mkdir()
+    (tmp_path / "甲" / "报价.xlsx").write_bytes(buffer.getvalue())
+
+    result = review_directory(tmp_path)
+
+    assert result["bidders"][0]["quotes"] == []
+    assert result["bidders"][0]["primary_quote"] is None
+    assert any("公式" in w["error"] for w in result["parse_warnings"])
+
+
+def test_vertical_pairing_stays_silent_on_ambiguous_followup_line(tmp_path):
+    """标签行下一行带税率/百分比语义或多个数字时一律放弃配对，宁可漏报。"""
+    (tmp_path / "甲").mkdir()
+    (tmp_path / "甲" / "报价.txt").write_text(
+        "投标总价\n下浮率 5%\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    assert result["bidders"][0]["quotes"] == []
+
+
+def test_relation_file_ambiguities_are_traceable_not_silent(tmp_path):
+    """回归：关联线索文件的格式歧义必须留痕，不得静默吞掉。
+
+    - CSV 表头重复列名：dict(zip()) 只保留最后一个取值，历史行为保留但须提示；
+    - JSON 非对象行：此前被静默忽略，现提示忽略行数。"""
+    _write_bid(tmp_path / "甲公司", 100000)
+    _write_bid(tmp_path / "乙公司", 100300)
+
+    dup = tmp_path / "重复表头.csv"
+    dup.write_text(
+        "bidder_a,bidder_a,relation\n甲公司,乙公司,法定代表人相同\n", encoding="utf-8")
+    result_dup = review_directory(tmp_path, relations=dup)
+    assert any("重复列名" in w["error"] for w in result_dup["parse_warnings"])
+    assert any(s["code"] == "LOCAL_RELATION_CLUE" for s in result_dup["signals"])
+
+    mixed = tmp_path / "混合行.json"
+    mixed.write_text(
+        json.dumps(["甲公司", {"bidder_a": "甲公司", "bidder_b": "乙公司", "relation": "同址"}],
+                   ensure_ascii=False),
+        encoding="utf-8")
+    result_mixed = review_directory(tmp_path, relations=mixed)
+    assert any("非对象记录" in w["error"] for w in result_mixed["parse_warnings"])
+    assert len(result_mixed["relation_clues"]) == 1
+    assert result_mixed["summary"]["parse_warning_count"] >= 1
