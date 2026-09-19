@@ -37,3 +37,7 @@ credentials*.json
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 本机代理/插件运行时产物（Mimosa 安全钩子、v2c 等），严禁纳入提交
+.mimosa/
+.v2c/
