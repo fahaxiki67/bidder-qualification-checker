@@ -136,7 +136,7 @@ _FOREIGN_CURRENCY_RE = re.compile(
 _NEGATIVE_AMOUNT_RE = re.compile(r"(?<![\w.])[-−]\s*\d")
 _QUOTE_NON_AMOUNT_CONTEXT_RE = re.compile(
     r"税率|税额|税点|tax[_ -]?rate|quantity|qty|数量|工程量|"
-    r"discount|percent|折扣|下浮率|工期|日历天|历天|总工天|完工天|%",
+    r"discount|percent|折扣|下浮率|工期|日历天|历天|总工天|完工天|%|保证金|单价",
     re.IGNORECASE,
 )
 # 标书总报价常见句式「…（¥ 79796559.18 ）的投标总报价，工期 1124 日历天」：
@@ -148,6 +148,15 @@ _CURRENCY_AMOUNT_RE = re.compile(r"[¥￥]\s*([0-9][0-9,，]*(?:\.[0-9]+)?)\s*(�
 _QUOTE_QUALIFIER_RE = re.compile(r"单价|总价|单价合计|合价|保证金|金额|合计|下浮|优惠|让利|费率|税")
 # 标签后唯一金额若紧邻工期词语，视为工期数字而非报价，宁可漏报。
 _DURATION_CONTEXT_RE = re.compile(r"工期|日历天|历天|总工天|完工天|天内完工|日内完工")
+# OCR 常把金额的小数点/千分位与数字断开（¥ 79796559. 18、1, 234.56）：
+# 分隔符与数字之间夹空白说明金额不完整，不猜，宁漏勿错。
+_SPLIT_AMOUNT_RE = re.compile(r"[0-9]\s+[.,，]\s*[0-9]|[0-9]\s*[.,，]\s+[0-9]")
+# 保证金/单价/合价等名词紧邻金额（之间只允许冒号、括号、货币符号、空白、
+# 「人民币」字样）时，金额属于该名词的语义，不得充当报价标签的取值。
+# 故意不含「合计/金额/总价/含税」——它们通常修饰报价标签本身。
+_AMOUNT_OWNER_RE = re.compile(
+    r"(?:保证金|单价|合价|费率|税率|税额)\s*[（(：:]?\s*(?:人民币)?\s*[（(：:]?\s*[¥￥]?\s*$"
+)
 _ACCOUNT_LABEL_RE = re.compile(
     r"银行账号|保证金账户|保证金账号|开户账号|银行账户|退款账户|"
     r"bank[_ -]?account|payment[_ -]?account",
@@ -360,6 +369,9 @@ def _parse_amount(value: Any) -> float | None:
         number = float(value)
         return number if math.isfinite(number) and number >= 0 else None
     text = str(value).strip()
+    if _SPLIT_AMOUNT_RE.search(text):
+        # 「50000. 18」「1, 234.56」等被 OCR 断开的数字不猜口径，宁漏勿错。
+        return None
     if _FOREIGN_CURRENCY_RE.search(text):
         return None
     text = text.replace("￥", "").replace("¥", "").replace("人民币", "")
@@ -421,7 +433,7 @@ def _amounts(value: Any) -> list[float]:
 def _quote_cell_amounts(value: Any) -> list[float]:
     """只从紧邻报价标签的、没有数量/税率语义的单元格取金额。"""
     text = str(value or "").strip()
-    if not text or _QUOTE_NON_AMOUNT_CONTEXT_RE.search(text):
+    if not text or _QUOTE_NON_AMOUNT_CONTEXT_RE.search(text) or _SPLIT_AMOUNT_RE.search(text):
         return []
     return _amounts(value)
 
@@ -560,11 +572,14 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
             # 更早的语义。
             tail_value = None
             if (len(matches) == 1 and candidates[0] is not None
-                    and not _AMBIGUOUS_DECIMAL_RE.search(tail)):
+                    and not _AMBIGUOUS_DECIMAL_RE.search(tail)
+                    and not _SPLIT_AMOUNT_RE.search(tail)):
                 span = matches[0]
                 # 唯一金额紧邻工期词语（如「工期 1124 日历天」「工期要求：…1124
-                # 天内完工」）时不算数，宁漏勿错。
-                if not _DURATION_CONTEXT_RE.search(tail[max(0, span.start() - 16):span.end() + 16]):
+                # 天内完工」）时不算数；金额前紧邻保证金/单价等属主名词（如
+                # 「投标保证金 50000 元」）时金额属于该名词。两者都不算报价，宁漏勿错。
+                if (not _DURATION_CONTEXT_RE.search(tail[max(0, span.start() - 16):span.end() + 16])
+                        and not _AMOUNT_OWNER_RE.search(tail[:span.start()])):
                     tail_value = candidates[0]
             head_value = None
             if tail_value is None:
@@ -576,10 +591,17 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
                             or _QUOTE_QUALIFIER_RE.search(trailing_head) is not None
                             or _AMBIGUOUS_DECIMAL_RE.search(currency_match.group(1))):
                         continue
-                    # OCR 常把金额断成空格分隔的多段（¥ 797 965 59.18）：
-                    # 数字组之后紧跟「空白+数字」说明金额被截断，不猜，宁漏勿错。
+                    # 金额前紧邻保证金/单价等属主名词（如「保证金（¥ 50000）」）时，
+                    # 金额属于该名词而非报价标签，回溯更早的货币金额。
+                    if _AMOUNT_OWNER_RE.search(head[:currency_match.start()]):
+                        continue
+                    # OCR 常把金额断成空格分隔的多段（¥ 797 965 59.18），或把小数点
+                    # 与数字断开（¥ 79796559. 18）：数字组之后紧跟「空白+数字」或
+                    # 「分隔符+空白+数字」说明金额被截断，不猜，宁漏勿错。
                     # 检查锚定数字组结尾（end(1)），避免单位组的 \s* 吞掉断号空格。
-                    if re.match(r"\s+[0-9]", compact[head_offset + currency_match.end(1):]):
+                    after_digits = compact[head_offset + currency_match.end(1):]
+                    if (re.match(r"\s+[0-9]", after_digits)
+                            or re.match(r"\s*[.,，]\s*[0-9]", after_digits)):
                         break
                     head_value = _parse_amount(
                         currency_match.group(1) + (currency_match.group(2) or ""))
@@ -599,6 +621,7 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
                     if (len(value_matches) == 1
                             and not _LABEL_RE.search(value_compact)
                             and not _QUOTE_NON_AMOUNT_CONTEXT_RE.search(value_compact)
+                            and not _SPLIT_AMOUNT_RE.search(value_compact)
                             and not _AMBIGUOUS_DECIMAL_RE.search(value_compact)):
                         continued = next_value_line(value_index)
                         # 数值行之后还紧跟数字行，更像一列明细数字而非汇总值，不配对。
@@ -711,7 +734,13 @@ def _rows_quotes(rows: list[list[Any]], source: str, *, sheet: str | None = None
             label_match = _LABEL_RE.search(cells[pos])
             tail = cells[pos][label_match.end():] if label_match else ""
             if tail:
-                candidates = _amounts(tail)
+                candidates = [] if _SPLIT_AMOUNT_RE.search(tail) else _amounts(tail)
+                if len(candidates) == 1:
+                    # 金额前紧邻保证金/单价等属主名词（如「单价：350 元」）时，
+                    # 金额属于该名词而非报价标签，宁漏勿错。
+                    first_amount = _AMOUNT_RE.search(tail)
+                    if first_amount and _AMOUNT_OWNER_RE.search(tail[:first_amount.start()]):
+                        candidates = []
             elif pos + 1 < len(cells):
                 candidates = _quote_cell_amounts(values[pos + 1])
                 # 相邻两个裸数字无法判断哪个是报价（常见误配：税率/数量在前），宁可漏报。

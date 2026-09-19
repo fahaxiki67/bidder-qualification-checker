@@ -400,6 +400,103 @@ def test_quote_extraction_review_findings_regression(tmp_path):
     # 断号与工期语境的两行不得产出报价
 
 
+def test_quote_owner_noun_amounts_never_become_quotes(tmp_path):
+    """回归（限定词/属主复核）：保证金、单价等属主名词紧邻的金额不是报价。
+
+    - 标签后唯一金额前紧邻属主名词（「投标保证金 50000 元」「单价 350 元」）
+      时不得充当报价——此前 tail 侧无限定词守卫，50000 会被当作总报价；
+    - head 内最靠近标签的货币金额前紧邻属主名词（「保证金（¥ 5000）」）时
+      回溯更早金额，全部属主化则宁漏勿错；
+    - 属主名词与金额距离较远（「履约保证金另行提交，本报价 50000」）或
+      修饰标签本身的词（「含税」）不阻断正常取值。"""
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.txt").write_text(
+        "总报价见商务标，投标保证金 50000.00 元\n"
+        "投标总报价：单价 350.00 元\n"
+        "报价人民币（¥ 79796559.18），其中保证金（¥ 5000.00 元）的投标总报价\n"
+        "投标总报价：履约保证金另行提交，本报价 50000.00 元\n"
+        "投标报价（含税）：50000 元\n",
+        encoding="utf-8",
+    )
+
+    result = review_directory(tmp_path)
+
+    values = sorted(q["value"] for q in result["bidders"][0]["quotes"])
+    assert values == [50000.0, 50000.0]
+
+
+def test_table_paths_skip_owner_nouns_and_split_amounts():
+    """表格路径同样受属主名词与断号金额守卫约束（offline_review._rows_quotes）。"""
+    quotes, _, _, _ = offline_review._rows_quotes(
+        [["投标总报价（单价：350 元）"], ["投标总价", "50000"]], "表.xlsx")
+    assert [q["value"] for q in quotes] == [50000.0]
+
+    quotes, _, _, _ = offline_review._rows_quotes([["投标总价", "50000. 18"]], "表.xlsx")
+    assert quotes == []
+
+
+def test_ocr_split_amount_boundaries(tmp_path):
+    """回归（OCR 截断边界复核）：小数点/千分位与数字被空白断开的金额不猜。
+
+    「¥ 79796559. 18」修复前在 head 侧被解析为 79796559.0、tail 侧解析为
+    18.0；「1, 234.56」在 tail 侧解析为 234.56；JSON 字段「50000. 18」
+    解析为 18。修复后 txt head/tail 与 JSON 字段一律宁漏勿错；
+    千分位无空格的「1,234,567.89」不受影响。"""
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.txt").write_text(
+        "（¥ 79796559. 18）的投标总报价\n"
+        "投标总报价：¥ 79796559. 18\n"
+        "投标总报价：1, 234.56\n"
+        "投标总价：1,234,567.89 元\n",
+        encoding="utf-8",
+    )
+    (bidder / "报价.json").write_text(
+        json.dumps({"投标总价": "50000. 18"}), encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    values = [q["value"] for q in result["bidders"][0]["quotes"]]
+    assert values == [1234567.89]
+    assert result["bidders"][0]["primary_quote"]["value"] == 1234567.89
+
+
+def test_head_currency_amount_unit_suffixes(tmp_path):
+    """回归（金额单位复核）：head 货币金额吸收「亿元/万/元」后缀，
+    与标签后金额（tail）及 _parse_amount 口径一致。"""
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.txt").write_text(
+        "（¥ 0.8 亿元）的投标总报价\n"
+        "（¥ 100 万）的投标总报价\n"
+        "（¥ 50000 元）的投标总报价\n",
+        encoding="utf-8",
+    )
+
+    result = review_directory(tmp_path)
+
+    values = sorted(q["value"] for q in result["bidders"][0]["quotes"])
+    assert values == [50000.0, 1000000.0, 80000000.0]
+
+
+def test_duration_context_window_boundary(tmp_path):
+    """回归（工期窗口边界复核）：工期词语在唯一金额 ±16 字符窗口内不取值
+    （test_quote_extraction_review_findings_regression 的 1124 天内完工行），
+    窗口外不得误伤正常报价，与
+    test_normal_single_amount_unaffected_by_duration_guard 合成双向语义。"""
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.txt").write_text(
+        "投标总价：79796559.18 元，上述报价包含暂列金额与专业工程暂估价，工期另见专用条款\n",
+        encoding="utf-8",
+    )
+
+    result = review_directory(tmp_path)
+
+    assert [q["value"] for q in result["bidders"][0]["quotes"]] == [79796559.18]
+
+
 def test_public_result_redacts_accounts_inside_raw_fields(tmp_path):
     account = "6222021234567890123"
     bidder = tmp_path / "甲"
