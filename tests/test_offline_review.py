@@ -167,6 +167,38 @@ def test_text_quote_skips_multiple_amounts_in_one_line(tmp_path):
     assert not result["bidders"][0]["quotes"]
 
 
+def test_text_quote_prefers_currency_amount_before_label_over_trailing_duration(tmp_path):
+    """真实标书句式「（¥ 金额）的投标总报价，工期 N 日历天」：金额在标签之前。"""
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "商务文件.txt").write_text(
+        "1.我方已仔细研究了某工程施工招标文件的全部内容，愿意以人民币（大写）"
+        " 柒仟玖佰柒拾玖万陆仟伍佰伍拾玖元壹角捌分 元（¥ 79796559.18 ）的投标总报价，"
+        "工期 1124 日历天，按合同约定实施和完成承包工程。\n",
+        encoding="utf-8",
+    )
+
+    result = review_directory(tmp_path)
+
+    quotes = result["bidders"][0]["quotes"]
+    assert len(quotes) == 1
+    assert quotes[0]["value"] == 79796559.18
+    assert quotes[0]["label"] == "总报价"
+    assert result["bidders"][0]["primary_quote"]["value"] == 79796559.18
+
+
+def test_text_quote_skips_duration_amount_without_currency_prefix(tmp_path):
+    """标签后唯一金额紧邻工期词语且无前置货币金额时，宁可漏报不当作报价。"""
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.txt").write_text("总报价，工期 1124 日历天\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    assert not result["bidders"][0]["quotes"]
+    assert result["bidders"][0]["primary_quote"] is None
+
+
 def test_review_parses_json_and_xlsx_with_traceable_hashes(tmp_path):
     first = tmp_path / "甲"
     first.mkdir()

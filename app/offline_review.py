@@ -136,9 +136,14 @@ _FOREIGN_CURRENCY_RE = re.compile(
 _NEGATIVE_AMOUNT_RE = re.compile(r"(?<![\w.])[-−]\s*\d")
 _QUOTE_NON_AMOUNT_CONTEXT_RE = re.compile(
     r"税率|税额|税点|tax[_ -]?rate|quantity|qty|数量|工程量|"
-    r"discount|percent|折扣|下浮率|%",
+    r"discount|percent|折扣|下浮率|工期|日历天|历天|总工天|%",
     re.IGNORECASE,
 )
+# 标书总报价常见句式「…（¥ 79796559.18 ）的投标总报价，工期 1124 日历天」：
+# 金额在标签之前、紧跟货币符号；标签后的数字往往是工期而非报价。
+_CURRENCY_AMOUNT_RE = re.compile(r"[¥￥]\s*([0-9][0-9,，]*(?:\.[0-9]+)?)")
+# 标签后唯一金额若紧邻工期词语，视为工期数字而非报价，宁可漏报。
+_DURATION_CONTEXT_RE = re.compile(r"工期|日历天|历天|总工天|完工天")
 _ACCOUNT_LABEL_RE = re.compile(
     r"银行账号|保证金账户|保证金账号|开户账号|银行账户|退款账户|"
     r"bank[_ -]?account|payment[_ -]?account",
@@ -543,12 +548,31 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
             tail = compact[label_match.end():]
             matches = list(_AMOUNT_RE.finditer(tail))
             candidates = [_parse_amount(match.group(0)) for match in matches]
-            # 一个歧义/无法解析的数字与另一个合法数字同现时，整行不猜报价。
-            if (len(matches) == 1 and candidates[0] is not None
-                    and not _AMBIGUOUS_DECIMAL_RE.search(tail)):
-                value = candidates[0]
+            # 「（¥ 金额）的投标总报价」句式：金额在标签之前、紧跟货币符号，
+            # 此时标签后的数字（常见为工期）不得顶替报价。货币金额到本次标签
+            # 之间不得再出现其他报价标签，否则金额属于更早的标签。
+            head = compact[max(0, label_match.start() - 48):label_match.start()]
+            currency_match = _CURRENCY_AMOUNT_RE.search(head)
+            currency_value = None
+            if currency_match:
+                trailing_head = head[currency_match.end():]
+                if (_LABEL_RE.search(trailing_head) is None
+                        and not _AMBIGUOUS_DECIMAL_RE.search(currency_match.group(1))):
+                    currency_value = _parse_amount(currency_match.group(1))
+            if currency_value is not None:
                 label = label_match.group(1)
-                quotes.append(_quote(label, value, source, f"第{index}行", line, _quote_kind(label)))
+                quotes.append(_quote(
+                    label, currency_value, source, f"第{index}行", line, _quote_kind(label),
+                ))
+            # 一个歧义/无法解析的数字与另一个合法数字同现时，整行不猜报价。
+            elif (len(matches) == 1 and candidates[0] is not None
+                    and not _AMBIGUOUS_DECIMAL_RE.search(tail)):
+                span = matches[0]
+                # 唯一金额紧邻工期词语（如「工期 1124 日历天」）时不作报价，宁漏勿错。
+                if not _DURATION_CONTEXT_RE.search(tail[max(0, span.start() - 10):span.end() + 10]):
+                    value = candidates[0]
+                    label = label_match.group(1)
+                    quotes.append(_quote(label, value, source, f"第{index}行", line, _quote_kind(label)))
             elif (len(matches) == 0 and _STRICT_QUOTE_LABEL_RE.search(compact)):
                 # 纵排汇总（标签独占一行、金额在下一非空行）：仅在下一行除唯一金额外
                 # 没有其他文字/标签/税率语义时按位置配对，任何歧义一律放弃，宁可漏报。
