@@ -879,3 +879,30 @@ def test_relation_file_ambiguities_are_traceable_not_silent(tmp_path):
     assert any("非对象记录" in w["error"] for w in result_mixed["parse_warnings"])
     assert len(result_mixed["relation_clues"]) == 1
     assert result_mixed["summary"]["parse_warning_count"] >= 1
+
+
+def test_normal_single_amount_unaffected_by_duration_guard(tmp_path):
+    """回归（工期守卫复核）：正常唯一金额报价不受工期守卫影响。
+
+    守卫结构（offline_review._text_quotes）中 quotes.append 与 value/label
+    赋值同处 `if not _DURATION_CONTEXT_RE.search(...)` 分支内；本测试与
+    test_text_quote_skips_duration_amount_without_currency_prefix 合起来
+    锁死「工期数字跳过、正常金额照常识别」的双向语义。"""
+    (tmp_path / "甲").mkdir()
+    (tmp_path / "甲" / "报价.txt").write_text("投标总价：1000000 元\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    assert [q["value"] for q in result["bidders"][0]["quotes"]] == [1000000.0]
+    assert result["bidders"][0]["primary_quote"]["value"] == 1000000.0
+
+
+def test_duration_context_guard_also_applies_to_adjacent_cells(tmp_path):
+    """回归：CSV 相邻单元格带工期语义（完工天等）时不得产报价，
+    与 txt 路径 _DURATION_CONTEXT_RE 的守卫范围保持一致。"""
+    (tmp_path / "甲").mkdir()
+    (tmp_path / "甲" / "q.csv").write_text("投标总价,2000 完工天\n", encoding="utf-8")
+
+    result = review_directory(tmp_path)
+
+    assert result["bidders"][0]["quotes"] == []

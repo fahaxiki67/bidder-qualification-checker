@@ -136,7 +136,7 @@ _FOREIGN_CURRENCY_RE = re.compile(
 _NEGATIVE_AMOUNT_RE = re.compile(r"(?<![\w.])[-−]\s*\d")
 _QUOTE_NON_AMOUNT_CONTEXT_RE = re.compile(
     r"税率|税额|税点|tax[_ -]?rate|quantity|qty|数量|工程量|"
-    r"discount|percent|折扣|下浮率|工期|日历天|历天|总工天|%",
+    r"discount|percent|折扣|下浮率|工期|日历天|历天|总工天|完工天|%",
     re.IGNORECASE,
 )
 # 标书总报价常见句式「…（¥ 79796559.18 ）的投标总报价，工期 1124 日历天」：
