@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [0.23.0-rc.4] - 2026-09-20
 
+### Added
+
+- **PDF 文档信息字典进入 E-01 元数据线索**：提取 Producer/Creator/Author（生成设备/软件、作者），
+  同一生成设备跨投标人一致时触发 E-01 元数据相同提示；元数据缺失或异常不阻断解析，
+  仅作人工复核线索，单个设备/作者相同不构成违法认定。
+
 ### Fixed
 
 - **根目录无前缀文件不再按文件名拆成多家投标人**：此前同一投标人的「报价.txt」「施工组织.md」
