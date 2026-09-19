@@ -19,7 +19,7 @@
 | macOS 包（P9） | ✅ | arm64 包+.command 启动；本机实测+CI 产物复验双验证 |
 | 收尾（P10） | ✅ | 打 tag 自动出 Release（三平台测试门+双平台打包+五类产物），v0.11.0 实证 |
 
-**质量基线**：当前工作树全量测试为 325 passed、1 skipped（本机跳过项为 Windows 无创建符号链接权限）；提交 `956b25e` 的 GitHub CI 三平台均 326 passed，通用构建、wheel/sdist 隔离烟测及 Windows/macOS 打包烟测均通过；全程 mock/fixture，零真实站点依赖；每阶段一个 tag 发版（v0.3.0→v0.14.0）。
+**质量基线**：本总结撰写时（v0.14.0 收口后）工作树全量测试为 325 passed、1 skipped（本机跳过项为 Windows 无创建符号链接权限）；提交 `956b25e`（v0.22.0）的 GitHub CI 三平台均 326 passed，通用构建、wheel/sdist 隔离烟测及 Windows/macOS 打包烟测均通过；此后各轮最新测试统计以 `docs/PROGRESS.md` 收口记录为准。全程 mock/fixture，零真实站点依赖；每阶段一个 tag 发版（v0.3.0→v0.14.0）。
 
 ## 二、红线兑现（全部有测试锁定）
 
