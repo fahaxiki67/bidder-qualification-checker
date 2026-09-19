@@ -372,6 +372,34 @@ def test_pdf_producer_device_metadata_triggers_e01(tmp_path):
     assert not any("丙公司" in scope for scope in scopes)
 
 
+def test_quote_extraction_review_findings_regression(tmp_path):
+    """独立复核发现的取值优先级与抗损边界（offline_review._text_quotes）。
+
+    - tail 唯一合法金额优先：head 里的更早 ¥ 金额（如单价）不得顶替合计；
+    - head 货币金额取最靠近标签的一个（最右），且其与标签间不得夹限定词；
+    - OCR 断号金额（¥ 797 965 59.18）不猜测；
+    - head 货币金额吸收「万元/亿」后缀，与 tail 口径一致；
+    - 工期语境窗口 ±16 字符。
+    """
+    bidder = tmp_path / "甲"
+    bidder.mkdir()
+    (bidder / "报价.txt").write_text(
+        "单价：¥ 350.00 合计金额 ¥ 87,500.00\n"
+        "投标保证金：¥ 50000，愿以（¥ 79796559.18）的投标总报价\n"
+        "（¥ 797 965 59.18 ）的投标总报价，工期 100 天\n"
+        "（¥ 7979.66 万元）的投标总报价\n"
+        "总报价见商务标，工期要求：自开工之日起算 1124 天内完工\n",
+        encoding="utf-8",
+    )
+
+    result = review_directory(tmp_path)
+
+    values = sorted(q["value"] for q in result["bidders"][0]["quotes"])
+    # 87500（合计）、79796559.18（最靠近标签的货币金额）、79796600（万元换算）
+    assert values == [87500.0, 79796559.18, 79796600.0]
+    # 断号与工期语境的两行不得产出报价
+
+
 def test_public_result_redacts_accounts_inside_raw_fields(tmp_path):
     account = "6222021234567890123"
     bidder = tmp_path / "甲"

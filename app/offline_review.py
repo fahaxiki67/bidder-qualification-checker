@@ -141,9 +141,13 @@ _QUOTE_NON_AMOUNT_CONTEXT_RE = re.compile(
 )
 # 标书总报价常见句式「…（¥ 79796559.18 ）的投标总报价，工期 1124 日历天」：
 # 金额在标签之前、紧跟货币符号；标签后的数字往往是工期而非报价。
-_CURRENCY_AMOUNT_RE = re.compile(r"[¥￥]\s*([0-9][0-9,，]*(?:\.[0-9]+)?)")
+# 第二捕获组吸收「万元/亿元」等后缀单位，与标签后金额口径一致。
+_CURRENCY_AMOUNT_RE = re.compile(r"[¥￥]\s*([0-9][0-9,，]*(?:\.[0-9]+)?)\s*(亿元|亿|万元|万|元)?")
+# 货币金额与标签之间出现这些限定词时，金额属于更早的语义（单价/保证金等），
+# 不得作为本次标签的报价。
+_QUOTE_QUALIFIER_RE = re.compile(r"单价|总价|单价合计|合价|保证金|金额|合计|下浮|优惠|让利|费率|税")
 # 标签后唯一金额若紧邻工期词语，视为工期数字而非报价，宁可漏报。
-_DURATION_CONTEXT_RE = re.compile(r"工期|日历天|历天|总工天|完工天")
+_DURATION_CONTEXT_RE = re.compile(r"工期|日历天|历天|总工天|完工天|天内完工|日内完工")
 _ACCOUNT_LABEL_RE = re.compile(
     r"银行账号|保证金账户|保证金账号|开户账号|银行账户|退款账户|"
     r"bank[_ -]?account|payment[_ -]?account",
@@ -549,31 +553,41 @@ def _text_quotes(text: str, source: str) -> tuple[list[dict], list[dict]]:
             tail = compact[label_match.end():]
             matches = list(_AMOUNT_RE.finditer(tail))
             candidates = [_parse_amount(match.group(0)) for match in matches]
-            # 「（¥ 金额）的投标总报价」句式：金额在标签之前、紧跟货币符号，
-            # 此时标签后的数字（常见为工期）不得顶替报价。货币金额到本次标签
-            # 之间不得再出现其他报价标签，否则金额属于更早的标签。
-            head = compact[max(0, label_match.start() - 48):label_match.start()]
-            currency_match = _CURRENCY_AMOUNT_RE.search(head)
-            currency_value = None
-            if currency_match:
-                trailing_head = head[currency_match.end():]
-                if (_LABEL_RE.search(trailing_head) is None
-                        and not _AMBIGUOUS_DECIMAL_RE.search(currency_match.group(1))):
-                    currency_value = _parse_amount(currency_match.group(1))
-            if currency_value is not None:
-                label = label_match.group(1)
-                quotes.append(_quote(
-                    label, currency_value, source, f"第{index}行", line, _quote_kind(label),
-                ))
-            # 一个歧义/无法解析的数字与另一个合法数字同现时，整行不猜报价。
-            elif (len(matches) == 1 and candidates[0] is not None
+            # 「（¥ 金额）的投标总报价」句式：金额在标签之前、紧跟货币符号。
+            # 优先级：标签后方唯一且非工期语境的金额 → head 内最靠近标签的
+            # 货币金额（真报价句式）；都不成立则不猜。head 金额与标签之间
+            # 不得再出现其他标签或金额限定词（单价/保证金等），否则金额属于
+            # 更早的语义。
+            tail_value = None
+            if (len(matches) == 1 and candidates[0] is not None
                     and not _AMBIGUOUS_DECIMAL_RE.search(tail)):
                 span = matches[0]
-                # 唯一金额紧邻工期词语（如「工期 1124 日历天」）时不作报价，宁漏勿错。
-                if not _DURATION_CONTEXT_RE.search(tail[max(0, span.start() - 10):span.end() + 10]):
-                    value = candidates[0]
-                    label = label_match.group(1)
-                    quotes.append(_quote(label, value, source, f"第{index}行", line, _quote_kind(label)))
+                # 唯一金额紧邻工期词语（如「工期 1124 日历天」「工期要求：…1124
+                # 天内完工」）时不算数，宁漏勿错。
+                if not _DURATION_CONTEXT_RE.search(tail[max(0, span.start() - 16):span.end() + 16]):
+                    tail_value = candidates[0]
+            head_value = None
+            if tail_value is None:
+                head = compact[max(0, label_match.start() - 48):label_match.start()]
+                head_offset = label_match.start() - len(head)
+                for currency_match in reversed(list(_CURRENCY_AMOUNT_RE.finditer(head))):
+                    trailing_head = head[currency_match.end():]
+                    if (_LABEL_RE.search(trailing_head) is not None
+                            or _QUOTE_QUALIFIER_RE.search(trailing_head) is not None
+                            or _AMBIGUOUS_DECIMAL_RE.search(currency_match.group(1))):
+                        continue
+                    # OCR 常把金额断成空格分隔的多段（¥ 797 965 59.18）：
+                    # 数字组之后紧跟「空白+数字」说明金额被截断，不猜，宁漏勿错。
+                    # 检查锚定数字组结尾（end(1)），避免单位组的 \s* 吞掉断号空格。
+                    if re.match(r"\s+[0-9]", compact[head_offset + currency_match.end(1):]):
+                        break
+                    head_value = _parse_amount(
+                        currency_match.group(1) + (currency_match.group(2) or ""))
+                    break
+            value = tail_value if tail_value is not None else head_value
+            if value is not None:
+                label = label_match.group(1)
+                quotes.append(_quote(label, value, source, f"第{index}行", line, _quote_kind(label)))
             elif (len(matches) == 0 and _STRICT_QUOTE_LABEL_RE.search(compact)):
                 # 纵排汇总（标签独占一行、金额在下一非空行）：仅在下一行除唯一金额外
                 # 没有其他文字/标签/税率语义时按位置配对，任何歧义一律放弃，宁可漏报。
