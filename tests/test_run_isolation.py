@@ -247,7 +247,8 @@ def test_old_03x_db_migrates_without_data_loss(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "check_runs" in tables
     for table in ("source_queries", "rule_results", "manual_reviews", "project_companies"):
-        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        cols = {r[0] for r in conn.execute(
+            "SELECT name FROM pragma_table_info(?)", (table,))}
         assert "run_id" in cols, table
     # 历史数据原样保留，run_id=NULL 标记为迁移前
     sq = conn.execute("SELECT * FROM source_queries WHERE id=?", (legacy_sq,)).fetchone()

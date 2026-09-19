@@ -138,22 +138,38 @@ EXPECTED_TABLES = (
 
 #: 旧库升级（0.3.x → 0.4+）：为既有表补批次绑定列，幂等执行。
 #: 旧行 run_id 为 NULL = 迁移前的历史数据，原样保留可追溯，绝不删除旧库。
-_MIGRATIONS: dict[str, tuple[tuple[str, str], ...]] = {
-    "source_queries": (("run_id", "TEXT"),),
-    "rule_results": (("run_id", "TEXT"), ("scope", "TEXT")),
-    "manual_reviews": (("run_id", "TEXT"),),
-    "project_companies": (("run_id", "TEXT"),),
-}
+#: 迁移语句全部为模块常量：表名/列名是 SQL 标识符，无法走绑定参数，
+#: 因此这里不用任何 f-string 拼接，新增迁移时整句照抄常量。
+_MIGRATION_STATEMENTS: tuple[tuple[str, str, str], ...] = (
+    # (表名, 新列名, 完整迁移语句)
+    ("source_queries", "run_id",
+     "ALTER TABLE source_queries ADD COLUMN run_id TEXT"),
+    ("rule_results", "run_id",
+     "ALTER TABLE rule_results ADD COLUMN run_id TEXT"),
+    ("rule_results", "scope",
+     "ALTER TABLE rule_results ADD COLUMN scope TEXT"),
+    ("manual_reviews", "run_id",
+     "ALTER TABLE manual_reviews ADD COLUMN run_id TEXT"),
+    ("project_companies", "run_id",
+     "ALTER TABLE project_companies ADD COLUMN run_id TEXT"),
+)
+
+
+def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """表尚不存在时返回空集。标识符走 pragma_table_info 表值函数的绑定参数。"""
+    return {
+        row[0] for row in
+        conn.execute("SELECT name FROM pragma_table_info(?)", (table,))
+    }
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    for table, cols in _MIGRATIONS.items():
-        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    for table, column, statement in _MIGRATION_STATEMENTS:
+        have = _existing_columns(conn, table)
         if not have:
             continue  # 表尚不存在（由 SCHEMA 建表）
-        for name, ddl in cols:
-            if name not in have:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        if column not in have:
+            conn.execute(statement)
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
