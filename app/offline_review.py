@@ -90,7 +90,7 @@ LEGAL_BASIS = {
     "LOCAL_RELATION_CLUE": "《招标投标法实施条例》第34、39—40条涉及主体关系和串通投标的法定边界；本地线索不等同认定",
 }
 
-_ELECTRONIC_METADATA_FIELDS = {"author", "machine_id", "mac", "ip", "disk_serial", "certificate"}
+_ELECTRONIC_METADATA_FIELDS = {"author", "machine_id", "mac", "ip", "disk_serial", "certificate", "device"}
 
 _AMOUNT_RE = re.compile(
     r"(?<![\w.])[-+]?(?:(?:\d{1,3}(?:[.,，]\d{3})+)(?:[.,，]\d+)?|\d+(?:[.,，]\d+)?)"
@@ -163,6 +163,7 @@ _ITEM_QUANTITY_ALIASES = {"数量", "工程量", "quantity", "qty"}
 _FIELD_ALIASES = {
     "author": {"author", "作者", "创建者", "creator", "lastmodifiedby", "最后修改者"},
     "machine_id": {"机器码", "制作机器码", "machinecode", "machine_id", "creator_machine"},
+    "device": {"producer", "pdfcreator", "生成设备", "打印设备", "输出设备", "扫描设备"},
     "mac": {"mac", "mac地址", "mac_address", "网卡mac", "网卡mac地址"},
     "ip": {"ip", "ip地址", "ip_address", "上传ip", "下载ip", "网络地址"},
     "disk_serial": {"硬盘序列号", "硬盘号", "diskserial", "disk_serial"},
@@ -974,15 +975,31 @@ def _ocr_pdf_page(path: Path, page_number: int, timeout: float,
     return recognized.stdout.decode("utf-8", errors="replace")
 
 
-def _pdf_content(path: Path, source: str) -> tuple[str, list, list, dict, list]:
+def _pdf_content(path: Path, source: str) -> tuple[str, list, list, dict, list, dict]:
     from pypdf import PdfReader
 
     parts, quotes, items, pages, warnings = [], [], [], [], []
+    metadata: dict[str, list[dict]] = {}
     ocr_count, ocr_seconds, text_chars = 0, 0.0, 0
     ocr_tools, ocr_tool_error = None, None
     # ponytail: 单文件顺序 OCR，50 页/120 秒预算；更大扫描件需另行分批。
     with path.open("rb") as stream:
         reader = PdfReader(stream)
+        # 文档信息字典（生成设备/软件、作者）是跨投标人物理来源一致的辅助线索；
+        # 提取用受控字段名（producer/pdf_creator/author），缺失或异常不阻断解析。
+        try:
+            info = reader.metadata
+            if info:
+                pairs = []
+                if info.get("/Producer"):
+                    pairs.append(("producer", str(info["/Producer"]).strip()))
+                if info.get("/Creator"):
+                    pairs.append(("pdf_creator", str(info["/Creator"]).strip()))
+                if info.get("/Author"):
+                    pairs.append(("author", str(info["/Author"]).strip()))
+                metadata = _metadata_from_pairs(pairs)
+        except Exception:  # noqa: BLE001 - 元数据缺失不构成解析失败
+            metadata = {}
         page_count = len(reader.pages)
         for index in range(min(page_count, MAX_PDF_PAGES)):
             if text_chars >= MAX_PDF_TEXT_CHARS:
@@ -1101,7 +1118,7 @@ def _pdf_content(path: Path, source: str) -> tuple[str, list, list, dict, list]:
                  "partial_pages": partial_pages,
                  "failed_pages": failed_pages, "pages": pages,
                  "partial": bool(unprocessed_pages) or bool(failed_pages) or bool(partial_pages) or not pages}
-    return "\n".join(parts), quotes, items, structure, warnings
+    return "\n".join(parts), quotes, items, structure, warnings, metadata
 
 
 def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list[dict], dict, dict[str, list[dict]], str | None]:
@@ -1136,7 +1153,8 @@ def _file_metadata(path: Path, source: str) -> tuple[dict, str, list[dict], list
         structure = {"json_type": type(data).__name__, "top_level_keys": list(data)[:50] if isinstance(data, dict) else []}
         text = json.dumps(data, ensure_ascii=False, sort_keys=True)
     elif suffix == ".pdf":
-        text, quotes, items, structure, parse_warnings = _pdf_content(path, source)
+        text, quotes, items, structure, parse_warnings, pdf_metadata = _pdf_content(path, source)
+        _merge_metadata(metadata, pdf_metadata)
     elif suffix == ".xlsx":
         try:
             from openpyxl import load_workbook

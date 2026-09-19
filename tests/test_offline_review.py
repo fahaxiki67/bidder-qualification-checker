@@ -344,6 +344,34 @@ def test_pdf_text_layer_is_parsed_and_blank_pdf_flagged(tmp_path, monkeypatch):
     assert any("文本层" in w["reason"] for w in scanned.get("parse_warnings", []))
 
 
+def test_pdf_producer_device_metadata_triggers_e01(tmp_path):
+    """同一物理设备（Producer/Creator）产出两家投标 PDF 是典型围标线索，
+    PDF 文档信息字典须进入 E-01 的电子元数据比对池。"""
+    import io
+
+    from pypdf import PdfWriter
+
+    for company, producer in (("甲公司", "RICOH MP C2003"), ("乙公司", "RICOH MP C2003"),
+                              ("丙公司", "Fuji Xerox D110")):
+        directory = tmp_path / company
+        directory.mkdir()
+        writer = PdfWriter()
+        writer.add_blank_page(width=595, height=842)
+        writer.add_metadata({"/Producer": producer, "/Creator": f"{producer} driver"})
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        (directory / "投标文件.pdf").write_bytes(buffer.getvalue())
+
+    result = review_directory(tmp_path)
+
+    device_signals = [s for s in result["signals"]
+                      if s["code"] == "METADATA_MATCH"
+                      and any(v["field"] == "device" for v in s["evidence"])]
+    scopes = {frozenset(s["scope"].split(" ↔ ")) for s in device_signals}
+    assert frozenset({"甲公司", "乙公司"}) in scopes
+    assert not any("丙公司" in scope for scope in scopes)
+
+
 def test_public_result_redacts_accounts_inside_raw_fields(tmp_path):
     account = "6222021234567890123"
     bidder = tmp_path / "甲"
