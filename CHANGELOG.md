@@ -28,6 +28,10 @@ All notable changes to this project will be documented in this file.
   属主名词（如「投标保证金 50000 元」「单价：350 元」，含表格单元格与纵排配对值行）、紧邻
   工期词语（含「N 天内完工」与 CSV 相邻单元格守卫），或被 OCR 断开成多段数字/小数
   （「¥ 797 965 59.18」「¥ 79796559. 18」「1, 234.56」）时一律不猜，宁可漏报。
+- **GBK 编码文本不再被静默解成乱码**：txt/md/csv/json 及关联线索文件的解码此前在无 BOM 时
+  也按本机字节序尝试 `utf-16`，偶数长度且不含未配对代理的 GBK 字节流（大陆遗留系统常见）
+  会被「成功」解成乱码——报价/清单/关联线索标签全部丢失，`parse_status` 仍为 `OK` 且无任何
+  解析提示；现在 UTF-16 仅认显式 BOM（既有 BOM 能力不变），GBK 文本由 gb18030 正常兜底。
 
 ### Verification boundary
 

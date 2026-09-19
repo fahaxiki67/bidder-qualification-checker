@@ -12,6 +12,8 @@ Web `/review-bids` 的“输入目录”和“关联线索文件”均指运行 
 仅适合可信网络临时使用，不应把含企业资料的目录暴露给不受信任的网络。
 
 当前支持：`txt`、`md`、`csv`、`json`、`xlsx`、`pdf`（文本层与本机 OCR）。当前不解析：`xls`、`docx`。
+txt/md/csv/json 文本按 UTF-8（含 BOM）、带 BOM 的 UTF-16 或 GB18030 解码；
+无 BOM 的 UTF-16 不作猜测（GBK 等遗留编码按 GB18030 兜底，避免整文件乱码且无提示）。
 
 PDF 逐页读取；无文本、含图像或 Form 内容的页面尝试本机 OCR，结果保留页码和 `extraction_method`。
 页眉有文字的扫描页面仍会尝试 OCR。文件采用流式 SHA-256，原始文件保持不变；完整 OCR 文本不写入公开报告。

@@ -269,11 +269,26 @@ def _path_key(path: Path) -> str:
 
 
 def _decode(raw: bytes) -> str:
-    for encoding in ("utf-8-sig", "utf-16", "gb18030"):
+    """文本解码顺序：UTF-8（含 BOM）→ 带 BOM 的 UTF-16 → GB18030 → 宽松 UTF-8。
+
+    无 BOM 时不得尝试 'utf-16'：该编解码器按本机字节序解码，偶数长度且不含
+    未配对代理的 GBK 字节流（大陆遗留系统常见）会被「成功」解成乱码——报价、
+    清单、关联线索标签全部静默丢失且不留任何解析提示。合法 GBK 文本不可能以
+    FF/FE 开头（GBK 非法首/尾字节），UTF-8 亦不可能，故先查 UTF-16 BOM 安全。
+    """
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
         try:
-            return raw.decode(encoding)
+            return raw.decode("utf-16")
         except UnicodeDecodeError:
             pass
+    try:
+        return raw.decode("gb18030")
+    except UnicodeDecodeError:
+        pass
     return raw.decode("utf-8", errors="replace")
 
 

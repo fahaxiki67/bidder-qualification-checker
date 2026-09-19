@@ -1059,3 +1059,42 @@ def test_duration_context_guard_also_applies_to_adjacent_cells(tmp_path):
     result = review_directory(tmp_path)
 
     assert result["bidders"][0]["quotes"] == []
+
+
+def test_gbk_encoded_quote_file_is_not_silently_mojibake(tmp_path):
+    """回归：GBK 编码（大陆遗留系统常见）的报价文件不得被静默解成乱码。
+
+    偶数长度且不含未配对代理的字节流会「成功」通过无 BOM 的 'utf-16' 解码器
+    （按本机字节序），整文件变乱码且不留任何解析提示——报价/联系人标签全部
+    丢失，parse_status 仍为 OK。UTF-16 只认显式 BOM，GBK 交由 gb18030 兜底。"""
+    raw = "联系人：张三，电话 13800000000\n投标报价：50000 元\n".encode("gb18030")
+    # 前置条件：这段字节流恰好落入无 BOM 'utf-16' 的「成功乱码」陷阱。
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode("utf-8-sig")
+    raw.decode("utf-16")  # 无 BOM 也能解出（乱码），证明陷阱真实存在
+    assert not raw.startswith((b"\xff\xfe", b"\xfe\xff"))
+    (tmp_path / "甲公司").mkdir()
+    (tmp_path / "甲公司" / "报价.txt").write_bytes(raw)
+
+    result = review_directory(tmp_path)
+
+    bidder = result["bidders"][0]
+    assert bidder["files"][0]["parse_status"] == "OK"
+    assert [q["value"] for q in bidder["quotes"]] == [50000.0]
+    assert bidder["primary_quote"]["value"] == 50000.0
+    assert not result["parse_errors"]
+    assert not result["parse_warnings"]
+
+
+def test_utf16_bom_quote_file_still_parses(tmp_path):
+    """带 BOM 的 UTF-16 报价文件继续正常解析（既有能力不回归）。"""
+    (tmp_path / "甲公司").mkdir()
+    (tmp_path / "甲公司" / "报价.txt").write_text(
+        "联系人：李四\n投标报价：60000 元\n", encoding="utf-16")
+
+    result = review_directory(tmp_path)
+
+    bidder = result["bidders"][0]
+    assert bidder["files"][0]["parse_status"] == "OK"
+    assert [q["value"] for q in bidder["quotes"]] == [60000.0]
+    assert bidder["primary_quote"]["value"] == 60000.0
